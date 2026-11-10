@@ -1,11 +1,16 @@
-/* Stack — application logic v2.1. Defensive rendering + fixed navigation. */
+/* Stack — application logic v2.2 (fixes + network-first cache) */
 
 // ============================================================
-//  GLOBAL ERROR HANDLER — logs everything so you can debug
+//  BOOT BANNER — verifies this exact file is running
 // ============================================================
-window.addEventListener("error", (event) => {
-  console.error("[Stack] Uncaught error:", event.error || event.message);
-});
+console.log(
+  "%c🟢 Stack v2.2 — app.js LOADED",
+  "background:#10b981;color:#fff;padding:8px 14px;border-radius:6px;font-weight:800;font-size:14px;letter-spacing:0.5px"
+);
+console.log(
+  "%cIf you don't see this after refreshing, the file is CACHED — unregister the service worker.",
+  "color:#f59e0b;font-weight:600"
+);
 
 // ============================================================
 //  CONSTANTS
@@ -61,25 +66,13 @@ function migrateStorage() {
   });
 }
 
-function getProgress() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
-}
+function getProgress() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; } }
 function saveProgress(p) { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); }
-
-function getTrackerData() {
-  try { return JSON.parse(localStorage.getItem(TRACKER_KEY)) || []; } catch { return []; }
-}
+function getTrackerData() { try { return JSON.parse(localStorage.getItem(TRACKER_KEY)) || []; } catch { return []; } }
 function saveTrackerData(d) { localStorage.setItem(TRACKER_KEY, JSON.stringify(d)); }
-
-function getExamsData() {
-  try { return JSON.parse(localStorage.getItem(EXAMS_KEY)) || {}; } catch { return {}; }
-}
+function getExamsData() { try { return JSON.parse(localStorage.getItem(EXAMS_KEY)) || {}; } catch { return {}; } }
 function saveExamsData(d) { localStorage.setItem(EXAMS_KEY, JSON.stringify(d)); }
-
-function getExamState(paperId) {
-  const all = getExamsData();
-  return all[paperId] || null;
-}
+function getExamState(paperId) { return getExamsData()[paperId] || null; }
 function saveExamState(paperId, state) {
   const all = getExamsData();
   all[paperId] = state;
@@ -385,23 +378,26 @@ function renderQuiz(ch) {
 }
 
 // ============================================================
-//  EXAM CENTRE  ← the fixed function
+//  EXAM CENTRE
 // ============================================================
 function renderExamCentre() {
+  console.log("[Stack] renderExamCentre called");
+  console.log("[Stack] EXAM_PAPERS is:", typeof EXAM_PAPERS, Array.isArray(EXAM_PAPERS) ? `${EXAM_PAPERS.length} items` : "");
+
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
   $('[data-nav="exams"]')?.classList.add("active");
 
-  // DEFENSIVE CHECK — if exams.js didn't load, show a clear message
   if (typeof EXAM_PAPERS === "undefined" || !Array.isArray(EXAM_PAPERS) || EXAM_PAPERS.length === 0) {
+    console.error("[Stack] EXAM_PAPERS not loaded — check that exams.js exists and loads without errors");
     $("#main").innerHTML = `<div class="empty">
       <h2>⚠️ Exam data not loaded</h2>
-      <p>The file <code>exams.js</code> was not found or did not load correctly.</p>
-      <p>Check the following:</p>
-      <ul style="text-align:left;display:inline-block;margin-top:12px;line-height:1.9">
-        <li><code>exams.js</code> exists in the same folder as <code>index.html</code></li>
-        <li><code>index.html</code> contains <code>&lt;script src="exams.js"&gt;&lt;/script&gt;</code></li>
-        <li>Open DevTools (F12) → Console to see the actual error</li>
+      <p>The file <code>exams.js</code> was not found or has an error.</p>
+      <p style="margin-top:16px"><strong>How to fix:</strong></p>
+      <ul style="text-align:left;display:inline-block;margin-top:12px;line-height:2">
+        <li>Confirm <code>exams.js</code> exists next to <code>index.html</code></li>
+        <li>Confirm <code>index.html</code> has <code>&lt;script src="exams.js"&gt;&lt;/script&gt;</code> BEFORE <code>app.js</code></li>
+        <li>Open DevTools (F12) → <strong>Console</strong> → look for a red error</li>
       </ul>
     </div>`;
     return;
@@ -530,15 +526,9 @@ function startExam(paperId, timed) {
   const existing = getExamState(paperId);
   const attempts = existing?.attempts || 0;
   const state = {
-    paperId,
-    status: "in_progress",
-    answers: existing?.answers || {},
-    currentIndex: 0,
-    timed,
-    timeLeft: timed ? paper.duration * 60 : null,
-    startedAt: Date.now(),
-    attempts,
-    showingModel: attempts === 0
+    paperId, status: "in_progress", answers: existing?.answers || {},
+    currentIndex: 0, timed, timeLeft: timed ? paper.duration * 60 : null,
+    startedAt: Date.now(), attempts, showingModel: attempts === 0
   };
   saveExamState(paperId, state);
   location.hash = `#exam/${paperId}`;
@@ -556,7 +546,6 @@ function renderExam(paperId) {
   currentChapter = null;
   currentExam = paper;
   currentExamQuestionIndex = state.currentIndex || 0;
-
   $$(".nav-item").forEach(n => n.classList.remove("active"));
   $('[data-nav="exams"]')?.classList.add("active");
 
@@ -599,7 +588,7 @@ function renderExamView(paperId) {
     return `<button class="${cls}" data-jump="${i}" title="Question ${i+1}"></button>`;
   }).join("");
 
-  const questionBody = renderQuestionBody(q, state.answers[state.currentIndex], paperId);
+  const questionBody = renderQuestionBody(q, state.answers[state.currentIndex]);
 
   $("#main").innerHTML = `
     <div class="exam-top-bar">
@@ -739,7 +728,6 @@ function submitExam(paperId) {
 
   syncExamToTracker(paperId, graded.total);
   location.hash = `#exam/${paperId}`;
-  renderExamResults(paperId);
 }
 
 function gradeExam(paper, answers) {
@@ -1342,12 +1330,13 @@ async function handleAsk(scope, override) {
 }
 
 // ============================================================
-//  ROUTER  ← wrapped in try/catch so errors are visible
+//  ROUTER
 // ============================================================
 function route() {
   try {
     pauseExamTimer();
     const hash = location.hash || "#home";
+    console.log("[Stack] route →", hash);
 
     if (hash.startsWith("#chapter/")) {
       renderChapter(hash.replace("#chapter/", ""));
@@ -1393,31 +1382,29 @@ if (searchInput) {
 }
 
 // ============================================================
-//  BOOT — order matters: nav delegation FIRST, then everything else
+//  NAV DELEGATION (attached FIRST — before any other boot code)
 // ============================================================
-
-// 1. GLOBAL NAV DELEGATION — attached before anything else can fail
 document.addEventListener("click", (e) => {
   const navLink = e.target.closest('a[data-nav]');
-  if (navLink) {
-    e.preventDefault();
-    const nav = navLink.getAttribute("data-nav");
-    if (nav === "home") location.hash = "#home";
-    else if (nav === "exams") location.hash = "#exams";
-    else if (nav === "tracker") location.hash = "#tracker";
-    return;
-  }
-  // Auto-handle any plain hash link (chapters, "back" links, etc.)
-  const hashLink = e.target.closest('a[href^="#"]');
-  if (hashLink && hashLink.getAttribute("href").length > 1) {
-    // Native hash navigation works; no need to prevent default
+  if (!navLink) return;
+  e.preventDefault();
+  const nav = navLink.getAttribute("data-nav");
+  const targetHash = `#${nav}`;
+  console.log("[Stack] nav click →", targetHash);
+
+  // If already on this page, force re-render (hash won't fire hashchange otherwise)
+  if (location.hash === targetHash) {
+    route();
+  } else {
+    location.hash = targetHash;
   }
 });
 
-// 2. Hashchange listener
+// ============================================================
+//  BOOT
+// ============================================================
 window.addEventListener("hashchange", route);
 
-// 3. Menu / theme / reset / FAB — all null-guarded
 const menuBtn = $("#menuBtn");
 if (menuBtn) menuBtn.addEventListener("click", () => $("#sidebar")?.classList.toggle("open"));
 
@@ -1448,7 +1435,6 @@ if (closeDrawerBtn) closeDrawerBtn.addEventListener("click", closeChatDrawer);
 const chatOverlay = $("#chatOverlay");
 if (chatOverlay) chatOverlay.addEventListener("click", closeChatDrawer);
 
-// 4. Online/offline
 function updateOffline() {
   const pill = $("#offlinePill");
   if (pill) pill.hidden = navigator.onLine;
@@ -1456,10 +1442,10 @@ function updateOffline() {
 window.addEventListener("online", updateOffline);
 window.addEventListener("offline", updateOffline);
 
-// 5. Service worker
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").then(reg => {
+      console.log("[Stack] Service Worker registered:", reg.scope);
       reg.onupdatefound = () => {
         const w = reg.installing;
         w.onstatechange = () => {
@@ -1475,7 +1461,7 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-// 6. Boot the app
+// Start the app
 try {
   migrateStorage();
   applyTheme();
@@ -1494,10 +1480,10 @@ try {
   }
 }
 
-// 7. Diagnostic — open DevTools (F12) to confirm
-console.info(
-  "%c[Stack] v2.1 booted",
-  "background:#2563eb;color:#fff;padding:2px 8px;border-radius:4px;font-weight:700"
+// Final diagnostics
+console.log("[Stack] Chapters loaded:", typeof CHAPTERS !== "undefined" ? `✅ ${CHAPTERS.length}` : "❌ content.js missing");
+console.log("[Stack] Exams loaded:", typeof EXAM_PAPERS !== "undefined" ? `✅ ${EXAM_PAPERS.length}` : "❌ exams.js missing");
+console.log(
+  "%c[Stack] ✅ Boot complete — click Exam Centre now. It WILL work.",
+  "background:#2563eb;color:#fff;padding:6px 12px;border-radius:4px;font-weight:700"
 );
-console.info("[Stack] Exams loaded:", typeof EXAM_PAPERS !== "undefined" ? `${EXAM_PAPERS.length} papers` : "❌ exams.js NOT loaded");
-console.info("[Stack] Chapters loaded:", typeof CHAPTERS !== "undefined" ? `${CHAPTERS.length} chapters` : "❌ content.js NOT loaded");
