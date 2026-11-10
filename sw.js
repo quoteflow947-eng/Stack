@@ -1,14 +1,10 @@
-/* Stack Service Worker v2 */
+/* Stack Service Worker v3 — network-first for code, cache for offline */
 
-const CACHE = "stack-v2";
+const CACHE = "stack-v3";
 
-const ASSETS = [
+const APP_SHELL = [
   "./",
   "./index.html",
-  "./style.css",
-  "./app.js",
-  "./content.js",
-  "./exams.js",
   "./manifest.webmanifest.json",
   "./icon.svg"
 ];
@@ -17,9 +13,7 @@ self.addEventListener("install", (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE).then(cache =>
-      Promise.all(ASSETS.map(url =>
-        cache.add(url).catch(err => console.warn("Failed to cache:", url, err))
-      ))
+      Promise.all(APP_SHELL.map(url => cache.add(url).catch(() => {})))
     )
   );
 });
@@ -34,18 +28,38 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-      return fetch(event.request).then(response => {
-        if (response && response.status === 200 && response.type === "basic") {
+  const url = new URL(event.request.url);
+  const isCode = url.pathname.match(/\.(js|css)$/);
+  const isNavigation = event.request.mode === "navigate";
+
+  if (isCode) {
+    // NETWORK-FIRST — always fetch fresh JS/CSS; fall back to cache offline
+    event.respondWith(
+      fetch(event.request).then(response => {
+        if (response && response.status === 200) {
           const clone = response.clone();
           caches.open(CACHE).then(cache => cache.put(event.request, clone));
         }
         return response;
-      }).catch(() => {
-        if (event.request.mode === "navigate") return caches.match("./index.html");
-      });
-    })
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  if (isNavigation) {
+    event.respondWith(
+      fetch(event.request).then(response => {
+        if (response && response.status === 200) {
+          const clone = response.clone();
+          caches.open(CACHE).then(cache => cache.put(event.request, clone));
+        }
+        return response;
+      }).catch(() => caches.match("./index.html"))
+    );
+    return;
+  }
+
+  event.respondWith(
+    caches.match(event.request).then(cached => cached || fetch(event.request))
   );
 });
