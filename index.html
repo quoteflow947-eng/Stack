@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stack — Study smarter</title>
-<meta name="description" content="Read the notes. Take the quiz. Ask Stack AI.">
+<meta name="description" content="Read the notes. Sit full exams. Ask Stack AI.">
 <meta name="theme-color" content="#2563eb">
 <link rel="manifest" href="manifest.webmanifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -14,7 +14,7 @@
 
 <header class="topbar">
   <button class="menu-btn" id="menuBtn" aria-label="Open menu">☰</button>
-  <a href="#" class="brand" data-nav="home">
+  <a href="#home" class="brand" data-nav="home">
     <span class="brand-mark" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 2 2 7l10 5 10-5-10-5Z"/>
@@ -25,7 +25,7 @@
     <span class="brand-text">Stack</span>
   </a>
   <div class="search-wrap">
-    <input type="search" id="searchInput" placeholder="Search notes and quizzes…" autocomplete="off">
+    <input type="search" id="searchInput" placeholder="Search notes…" autocomplete="off">
   </div>
   <div class="topbar-actions">
     <span class="offline-pill" id="offlinePill" hidden>Offline</span>
@@ -34,38 +34,46 @@
 </header>
 
 <div class="layout">
-
   <aside class="sidebar" id="sidebar">
     <nav>
-      <a href="#" class="nav-item" data-nav="home">
-        <span class="nav-icon">⌂</span><span>Dashboard</span>
-      </a>
-      <a href="#" class="nav-item" data-nav="timetable">
-        <span class="nav-icon">📅</span><span>Exam Timetable</span>
-      </a>
-      <a href="#" class="nav-item" data-nav="tracker">
-        <span class="nav-icon">📊</span><span>Mark Tracker</span>
-      </a>
-      <a href="#" class="nav-item" data-nav="ask">
-        <span class="nav-icon">🤖</span><span>Ask Stack AI</span>
-      </a>
+      <a href="#home" class="nav-item" data-nav="home"><span class="nav-icon">⌂</span><span>Dashboard</span></a>
+      <a href="#exams" class="nav-item" data-nav="exams"><span class="nav-icon">✍️</span><span>Exam Centre</span></a>
+      <a href="#tracker" class="nav-item" data-nav="tracker"><span class="nav-icon">📊</span><span>Mark Tracker</span></a>
       <div id="chapterList"></div>
       <div class="nav-heading">Settings</div>
-      <button class="nav-item reset-btn" id="resetBtn">
-        <span class="nav-icon">↺</span><span>Reset progress</span>
-      </button>
+      <button class="nav-item reset-btn" id="resetBtn"><span class="nav-icon">↺</span><span>Reset progress</span></button>
     </nav>
   </aside>
+  <main class="main" id="main"></main>
+</div>
 
-  <main class="main" id="main">
-    <!-- Rendered by app.js -->
-  </main>
+<!-- AI FAB -->
+<button class="ai-fab" id="aiFab" aria-label="Open Stack AI">
+  <span class="ai-fab-inner">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2 L13.5 8.5 L20 10 L13.5 11.5 L12 18 L10.5 11.5 L4 10 L10.5 8.5 Z"/>
+    </svg>
+  </span>
+  <span class="ai-fab-label">AI</span>
+</button>
 
+<!-- Chat Drawer -->
+<div class="chat-overlay" id="chatOverlay" hidden></div>
+<div class="chat-drawer" id="chatDrawer">
+  <div class="chat-drawer-header">
+    <div class="chat-drawer-title">
+      <span class="chat-drawer-icon">✨</span>
+      <span>Stack AI</span>
+    </div>
+    <button class="icon-btn" id="closeDrawer" aria-label="Close chat">✕</button>
+  </div>
+  <div class="chat-drawer-body" id="chatDrawerBody"></div>
 </div>
 
 <div class="toast" id="toast" hidden></div>
 
 <script src="content.js"></script>
+<script src="exams.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
