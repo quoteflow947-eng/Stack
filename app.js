@@ -1,5 +1,15 @@
-/* Stack — application logic v2. All state in localStorage. Fully offline. */
+/* Stack — application logic v2.1. Defensive rendering + fixed navigation. */
 
+// ============================================================
+//  GLOBAL ERROR HANDLER — logs everything so you can debug
+// ============================================================
+window.addEventListener("error", (event) => {
+  console.error("[Stack] Uncaught error:", event.error || event.message);
+});
+
+// ============================================================
+//  CONSTANTS
+// ============================================================
 const STORAGE_KEY = "stack:progress";
 const THEME_KEY = "stack:theme";
 const TRACKER_KEY = "stack:tracker_v5";
@@ -22,14 +32,15 @@ const QUICK_START_QUESTIONS = [
   "How do I calculate VAT inclusive/exclusive?"
 ];
 
+// ============================================================
+//  STATE
+// ============================================================
 let currentChapter = null;
 let currentTab = "notes";
 let quizState = null;
 let trackerData = [];
 let activeModuleId = null;
 let chatHistory = [];
-
-// Exam state (in-memory mirrors)
 let currentExam = null;
 let currentExamQuestionIndex = 0;
 let examTimerHandle = null;
@@ -37,7 +48,9 @@ let examTimerHandle = null;
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-// ============ STORAGE ============
+// ============================================================
+//  STORAGE
+// ============================================================
 function migrateStorage() {
   const pairs = [["brainstack:progress", STORAGE_KEY], ["brainstack:theme", THEME_KEY], ["brainstack:tracker_v5", TRACKER_KEY]];
   pairs.forEach(([oldK, newK]) => {
@@ -73,7 +86,9 @@ function saveExamState(paperId, state) {
   saveExamsData(all);
 }
 
-// ============ HELPERS ============
+// ============================================================
+//  HELPERS
+// ============================================================
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
@@ -87,6 +102,7 @@ function shuffle(arr) {
 }
 function showToast(msg, ms = 3000) {
   const t = $("#toast");
+  if (!t) return;
   t.textContent = msg;
   t.hidden = false;
   clearTimeout(showToast._t);
@@ -98,18 +114,24 @@ function formatTime(seconds) {
   const s = seconds % 60;
   return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
+function isEmptyAnswer(a) {
+  if (a == null) return true;
+  if (typeof a === "string") return !a.trim();
+  if (typeof a === "object") return Object.values(a).every(v => v == null || v === "");
+  return false;
+}
 
-// ============ THEME ============
+// ============================================================
+//  THEME
+// ============================================================
 function applyTheme() {
   const theme = localStorage.getItem(THEME_KEY) || "light";
   document.documentElement.classList.toggle("dark", theme === "dark");
 }
-$("#themeBtn").addEventListener("click", () => {
-  const isDark = document.documentElement.classList.toggle("dark");
-  localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
-});
 
-// ============ MARKDOWN ============
+// ============================================================
+//  MARKDOWN
+// ============================================================
 function mdToHtml(md) {
   const lines = md.trim().split("\n");
   const out = [];
@@ -151,9 +173,12 @@ function mdToHtml(md) {
   return out.join("\n");
 }
 
-// ============ SIDEBAR ============
+// ============================================================
+//  SIDEBAR
+// ============================================================
 function renderSidebar() {
   const list = $("#chapterList");
+  if (!list) return;
   const progress = getProgress();
   const modules = [...new Set(CHAPTERS.map(c => c.module))];
   let html = "";
@@ -173,7 +198,9 @@ function renderSidebar() {
   list.innerHTML = html;
 }
 
-// ============ HOME ============
+// ============================================================
+//  HOME
+// ============================================================
 function renderHome() {
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
@@ -204,7 +231,7 @@ function renderHome() {
     <div class="recent-marks">
       <h3>Recent exam results</h3>
       ${recent.map(([id, st]) => {
-        const paper = findExamPaper(id);
+        const paper = (typeof findExamPaper === "function") ? findExamPaper(id) : null;
         if (!paper) return "";
         return `<div class="recent-mark-row">
           <div>
@@ -240,26 +267,22 @@ function renderHome() {
 }
 
 function renderContinueExamCard([paperId, state]) {
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   if (!paper) return "";
+  const answered = Object.values(state.answers || {}).filter(a => a && !isEmptyAnswer(a)).length;
   return `<div class="continue-exam-card">
     <div>
       <div class="continue-eyebrow">Resume exam</div>
       <div class="continue-title">${escapeHtml(paper.module)} · ${escapeHtml(paper.name)}</div>
-      <div class="continue-sub">In progress · ${Object.values(state.answers || {}).filter(a => a && !isEmptyAnswer(a)).length} of ${paper.questions.length} answered</div>
+      <div class="continue-sub">In progress · ${answered} of ${paper.questions.length} answered</div>
     </div>
     <a href="#exam/${paperId}" class="btn btn-primary">Continue →</a>
   </div>`;
 }
 
-function isEmptyAnswer(a) {
-  if (a == null) return true;
-  if (typeof a === "string") return !a.trim();
-  if (typeof a === "object") return Object.values(a).every(v => v == null || v === "");
-  return false;
-}
-
-// ============ CHAPTER ============
+// ============================================================
+//  CHAPTER
+// ============================================================
 function renderChapter(id) {
   const ch = CHAPTERS.find(c => c.id === id);
   if (!ch) { location.hash = "#home"; return; }
@@ -295,16 +318,20 @@ function renderTab() {
   const ch = currentChapter;
   if (!ch) return;
   const body = $("#chapterBody");
+  if (!body) return;
   if (currentTab === "notes") body.innerHTML = `<div class="content">${mdToHtml(ch.notes)}</div>`;
   else if (currentTab === "quiz") renderQuiz(ch);
 }
 
-// ============ QUIZ ============
+// ============================================================
+//  QUIZ
+// ============================================================
 function renderQuiz(ch) {
   if (!quizState) {
     quizState = { index: 0, answers: new Array(ch.quiz.length).fill(undefined), questions: shuffle(ch.quiz), done: false, reviewing: false };
   }
   const body = $("#chapterBody");
+  if (!body) return;
   const total = quizState.questions.length;
 
   if (quizState.reviewing) {
@@ -357,11 +384,28 @@ function renderQuiz(ch) {
   });
 }
 
-// ============ EXAM CENTRE ============
+// ============================================================
+//  EXAM CENTRE  ← the fixed function
+// ============================================================
 function renderExamCentre() {
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
   $('[data-nav="exams"]')?.classList.add("active");
+
+  // DEFENSIVE CHECK — if exams.js didn't load, show a clear message
+  if (typeof EXAM_PAPERS === "undefined" || !Array.isArray(EXAM_PAPERS) || EXAM_PAPERS.length === 0) {
+    $("#main").innerHTML = `<div class="empty">
+      <h2>⚠️ Exam data not loaded</h2>
+      <p>The file <code>exams.js</code> was not found or did not load correctly.</p>
+      <p>Check the following:</p>
+      <ul style="text-align:left;display:inline-block;margin-top:12px;line-height:1.9">
+        <li><code>exams.js</code> exists in the same folder as <code>index.html</code></li>
+        <li><code>index.html</code> contains <code>&lt;script src="exams.js"&gt;&lt;/script&gt;</code></li>
+        <li>Open DevTools (F12) → Console to see the actual error</li>
+      </ul>
+    </div>`;
+    return;
+  }
 
   const examsData = getExamsData();
   const modules = [...new Set(EXAM_PAPERS.map(p => p.module))];
@@ -374,7 +418,7 @@ function renderExamCentre() {
   `;
 
   modules.forEach(mod => {
-    const papers = getExamsByModule(mod);
+    const papers = EXAM_PAPERS.filter(p => p.module === mod);
     html += `<div class="exam-module-section">
       <div class="exam-module-title">${escapeHtml(mod)}</div>
       <div class="exam-grid">
@@ -417,16 +461,17 @@ function renderExamCard(paper, state) {
   </div>`;
 }
 
-// ============ EXAM INSTRUCTIONS ============
+// ============================================================
+//  EXAM INSTRUCTIONS
+// ============================================================
 function renderExamInstructions(paperId) {
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   if (!paper) { location.hash = "#exams"; return; }
 
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
   $('[data-nav="exams"]')?.classList.add("active");
 
-  // Build section summary
   const sections = {};
   paper.questions.forEach(q => {
     if (!sections[q.section]) sections[q.section] = { title: q.sectionTitle, count: 0, marks: 0 };
@@ -447,7 +492,6 @@ function renderExamInstructions(paperId) {
         <div><span class="label">Total marks</span><span class="value">100</span></div>
         <div><span class="label">Questions</span><span class="value">${paper.questions.length}</span></div>
       </div>
-
       <div class="section-summary">
         <h3>Sections</h3>
         ${Object.entries(sections).map(([key, s]) => `
@@ -457,7 +501,6 @@ function renderExamInstructions(paperId) {
           </div>
         `).join("")}
       </div>
-
       <div class="exam-rules">
         <h3>Instructions</h3>
         <ul>
@@ -482,7 +525,7 @@ function renderExamInstructions(paperId) {
 }
 
 function startExam(paperId, timed) {
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   if (!paper) return;
   const existing = getExamState(paperId);
   const attempts = existing?.attempts || 0;
@@ -501,12 +544,13 @@ function startExam(paperId, timed) {
   location.hash = `#exam/${paperId}`;
 }
 
-// ============ EXAM TAKING ============
+// ============================================================
+//  EXAM TAKING
+// ============================================================
 function renderExam(paperId) {
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   const state = getExamState(paperId);
   if (!paper || !state) { location.hash = "#exams"; return; }
-
   if (state.status === "submitted") { renderExamResults(paperId); return; }
 
   currentChapter = null;
@@ -542,7 +586,7 @@ function pauseExamTimer() {
 }
 
 function renderExamView(paperId) {
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   const state = getExamState(paperId);
   if (!paper || !state) return;
   const q = paper.questions[state.currentIndex];
@@ -584,7 +628,6 @@ function renderExamView(paperId) {
     </div>
   `;
 
-  // Wire handlers
   $("#prevQ")?.addEventListener("click", () => { state.currentIndex = Math.max(0, state.currentIndex - 1); saveExamState(paperId, state); renderExamView(paperId); });
   $("#nextQ")?.addEventListener("click", () => { state.currentIndex = Math.min(total - 1, state.currentIndex + 1); saveExamState(paperId, state); renderExamView(paperId); });
   $("#skipQ")?.addEventListener("click", () => { state.currentIndex = Math.min(total - 1, state.currentIndex + 1); saveExamState(paperId, state); renderExamView(paperId); });
@@ -595,7 +638,7 @@ function renderExamView(paperId) {
   wireQuestionInputs(paperId, q, state);
 }
 
-function renderQuestionBody(q, answer, paperId) {
+function renderQuestionBody(q, answer) {
   if (q.type === "mcq") {
     return q.options.map((opt, i) => `
       <button class="exam-mcq-option ${answer === i ? "selected" : ""}" data-mcq="${i}">
@@ -665,8 +708,9 @@ function wireQuestionInputs(paperId, q, state) {
 }
 
 function confirmAndSubmit(paperId) {
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   const state = getExamState(paperId);
+  if (!paper || !state) return;
   const unanswered = paper.questions.filter((q, i) => isEmptyAnswer(state.answers[i])).length;
   const msg = unanswered > 0
     ? `You have ${unanswered} unanswered question${unanswered !== 1 ? "s" : ""}. Submit anyway?`
@@ -674,10 +718,12 @@ function confirmAndSubmit(paperId) {
   if (confirm(msg)) submitExam(paperId);
 }
 
-// ============ SUBMIT & GRADE ============
+// ============================================================
+//  SUBMIT & GRADE
+// ============================================================
 function submitExam(paperId) {
   pauseExamTimer();
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   const state = getExamState(paperId);
   if (!paper || !state) return;
 
@@ -693,6 +739,7 @@ function submitExam(paperId) {
 
   syncExamToTracker(paperId, graded.total);
   location.hash = `#exam/${paperId}`;
+  renderExamResults(paperId);
 }
 
 function gradeExam(paper, answers) {
@@ -735,7 +782,7 @@ function gradeQuestion(q, answer) {
         const correct = checkTableCell(cell, studentVal);
         const awarded = correct ? (cell.marks || 0) : 0;
         score += awarded;
-        criteria.push({ label: `R${ri+1} C${ci+1}`, expected: cell.expected ?? cell.options?.[0], studentVal, hit: correct, marks: cell.marks || 0, awarded });
+        criteria.push({ label: `Row ${ri+1}`, expected: cell.expected ?? cell.options?.[0], studentVal, hit: correct, marks: cell.marks || 0, awarded });
       });
     });
     return { score: Math.round(score * 2) / 2, maxMarks: q.marks, criteria };
@@ -751,7 +798,9 @@ function checkTableCell(cell, studentVal) {
   return Math.abs(num - cell.expected) <= (cell.tolerance || 0);
 }
 
-// ============ TEXT MATCHING ============
+// ============================================================
+//  TEXT MATCHING
+// ============================================================
 const STOP_MATCH = new Set(["the","a","an","is","are","was","were","of","to","in","on","for","and","or","it","this","that","be","by","as","at","if","so"]);
 const MATCH_SUFFIXES = [[/ies$/, "y"], [/sses$/, "ss"], [/ing$/, ""], [/ed$/, ""], [/ly$/, ""], [/s$/, ""]];
 
@@ -760,32 +809,29 @@ function stemMatch(w) {
   for (const [re, rep] of MATCH_SUFFIXES) if (re.test(w)) return w.replace(re, rep);
   return w;
 }
-
 function normalizeText(t) {
   return String(t || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
 }
-
 function textContainsConcept(text, concept) {
   const normText = normalizeText(text);
   const normConcept = normalizeText(concept);
   if (!normConcept) return false;
   if (normText.includes(normConcept)) return true;
-
   const conceptWords = normConcept.split(" ").filter(w => w.length > 2);
   if (!conceptWords.length) return normText.includes(normConcept);
-
   const textWords = normText.split(" ");
   const textStems = textWords.map(stemMatch);
-
   return conceptWords.every(cw => {
     const cs = stemMatch(cw);
     return textStems.some(ts => ts === cs || ts.includes(cs) || cs.includes(ts));
   });
 }
 
-// ============ RESULTS ============
+// ============================================================
+//  RESULTS
+// ============================================================
 function renderExamResults(paperId) {
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   const state = getExamState(paperId);
   if (!paper || !state || !state.graded) { location.hash = "#exams"; return; }
 
@@ -812,7 +858,6 @@ function renderExamResults(paperId) {
       <div class="results-score">${g.total} <span class="results-score-max">/ 100</span></div>
       <div class="results-percent">${pct}% · ${grade}</div>
     </div>
-
     <div class="section-breakdown">
       <h3>Section breakdown</h3>
       ${Object.entries(sectionScores).map(([s, data]) => {
@@ -824,11 +869,10 @@ function renderExamResults(paperId) {
         </div>`;
       }).join("")}
     </div>
-
     <div class="results-actions">
       <button class="btn btn-primary" id="reviewExamBtn">Review answers</button>
       <button class="btn" id="retakeBtn">Retake exam</button>
-      ${state.attempts > 1 ? `<div class="retake-note">This attempt #${state.attempts}. Model answers are hidden on retakes.</div>` : ""}
+      ${state.attempts > 1 ? `<div class="retake-note">This is attempt #${state.attempts}. Model answers are hidden on retakes.</div>` : ""}
     </div>
     <div id="reviewPanel"></div>
   `;
@@ -836,7 +880,7 @@ function renderExamResults(paperId) {
   $("#reviewExamBtn").addEventListener("click", () => renderExamReview(paperId));
   $("#retakeBtn").addEventListener("click", () => {
     if (confirm("Retake this exam? Your best score is kept in the Tracker.")) {
-      const newState = { ...getExamState(paperId), status: "not_started", answers: {}, currentIndex: 0, timeLeft: null };
+      const newState = { ...getExamState(paperId), status: "not_started", answers: {}, currentIndex: 0, timeLeft: null, graded: null };
       saveExamState(paperId, newState);
       location.hash = `#exam-instructions/${paperId}`;
     }
@@ -852,12 +896,13 @@ function gradeFromScore(score) {
 }
 
 function renderExamReview(paperId) {
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   const state = getExamState(paperId);
   if (!paper || !state || !state.graded) return;
   const showModel = state.showingModel;
 
   const panel = $("#reviewPanel");
+  if (!panel) return;
   let html = `<h3 style="margin-top:40px">Question-by-question review</h3>`;
 
   state.graded.perQuestion.forEach((pq, i) => {
@@ -902,9 +947,11 @@ function stringifyAnswer(ans) {
   return String(ans);
 }
 
-// ============ TRACKER ============
+// ============================================================
+//  TRACKER
+// ============================================================
 function syncExamToTracker(paperId, score) {
-  const paper = findExamPaper(paperId);
+  const paper = (typeof findExamPaper === "function") ? findExamPaper(paperId) : null;
   if (!paper) return;
   const data = getTrackerData();
   let mod = data.find(m => m.name === paper.module);
@@ -912,7 +959,6 @@ function syncExamToTracker(paperId, score) {
     mod = { id: "mod_" + Date.now(), name: paper.module, code: CPUT_MODULES.find(c => c.name === paper.module)?.code || "", assessments: [] };
     data.push(mod);
   }
-  // Find or create the assessment linked to this paper
   let ass = mod.assessments.find(a => a.examRef === paperId);
   if (!ass) {
     ass = { id: "ass_" + paperId, type: paper.name, status: "released", mark: "", weight: 50, examRef: paperId };
@@ -921,7 +967,7 @@ function syncExamToTracker(paperId, score) {
   ass.mark = Math.round(score);
   ass.status = "released";
   saveTrackerData(data);
-  showToast(`Mark saved to Tracker: ${paper.module} · ${paper.name} = ${Math.round(score)}/100`);
+  showToast(`Mark saved: ${paper.module} · ${paper.name} = ${Math.round(score)}/100`);
 }
 
 function calculateModuleStats(mod) {
@@ -978,24 +1024,19 @@ window.addModuleFromList = function(name, code) {
   renderTrackerDashboard();
   showToast(`${name} added.`);
 };
-
 window.openModule = function(id) { activeModuleId = id; renderTrackerModule(id); };
-
 window.deleteTrackerModule = function(id) {
   if (!confirm("Remove this module?")) return;
   trackerData = trackerData.filter(m => m.id !== id);
   saveTrackerData(trackerData);
   renderTrackerDashboard();
 };
-
 window.deleteTrackerAssessment = function(modId, assId) {
   if (!confirm("Delete this assessment?")) return;
   const mod = trackerData.find(m => m.id === modId);
   if (mod) { mod.assessments = mod.assessments.filter(a => a.id !== assId); saveTrackerData(trackerData); renderTrackerModule(modId); }
 };
-
 window.backToTracker = function() { activeModuleId = null; renderTrackerDashboard(); };
-
 window.updateAss = function(el) {
   const modId = el.dataset.mod, assId = el.dataset.ass, field = el.dataset.field, val = el.value;
   const mod = trackerData.find(m => m.id === modId);
@@ -1006,6 +1047,13 @@ window.updateAss = function(el) {
   saveTrackerData(trackerData);
   const summaryBox = $(".tracker-summary-box");
   if (summaryBox) summaryBox.innerHTML = summaryHtml(calculateModuleStats(mod));
+};
+window.addNewAssessment = function(modId) {
+  const mod = trackerData.find(m => m.id === modId);
+  if (!mod) return;
+  mod.assessments.push({ id: "ass_" + Date.now(), type: "Test", status: "pending", mark: "", weight: "" });
+  saveTrackerData(trackerData);
+  renderTrackerModule(modId);
 };
 
 function summaryHtml(stats) {
@@ -1063,32 +1111,30 @@ function renderTrackerModule(modId) {
   `;
 }
 
-window.addNewAssessment = function(modId) {
-  const mod = trackerData.find(m => m.id === modId);
-  if (!mod) return;
-  mod.assessments.push({ id: "ass_" + Date.now(), type: "Test", status: "pending", mark: "", weight: "" });
-  saveTrackerData(trackerData);
-  renderTrackerModule(modId);
-};
-
-// ============ AI DRAWER ============
+// ============================================================
+//  AI DRAWER
+// ============================================================
 function openChatDrawer() {
   const drawer = $("#chatDrawer");
   const overlay = $("#chatOverlay");
+  if (!drawer || !overlay) return;
   drawer.classList.add("open");
   overlay.hidden = false;
-  const scope = currentChapter;
-  renderChatIntoDrawer(scope);
+  renderChatIntoDrawer(currentChapter);
 }
 function closeChatDrawer() {
-  $("#chatDrawer").classList.remove("open");
-  $("#chatOverlay").hidden = true;
+  const drawer = $("#chatDrawer");
+  const overlay = $("#chatOverlay");
+  if (drawer) drawer.classList.remove("open");
+  if (overlay) overlay.hidden = true;
 }
 
 function renderChatIntoDrawer(chapterScope) {
   chatHistory = [];
+  const mount = $("#chatDrawerBody");
+  if (!mount) return;
   const placeholder = chapterScope ? `Ask about ${chapterScope.title}…` : "Ask anything about your course…";
-  $("#chatDrawerBody").innerHTML = `
+  mount.innerHTML = `
     <div class="chat-container chat-drawer-container">
       <div class="chat-thread" id="chatThread"></div>
       <div class="chat-input-wrap">
@@ -1102,9 +1148,12 @@ function renderChatIntoDrawer(chapterScope) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAsk(chapterScope); }
   });
   renderChatThread(chapterScope);
+  $("#askInput").focus();
 }
 
-// ============ AI ENGINE ============
+// ============================================================
+//  AI ENGINE
+// ============================================================
 const STOPWORDS = new Set(["the","a","an","is","are","was","were","of","to","in","on","for","and","or","what","how","why","when","which","who","does","do","can","i","my","with","that","this","it","be","by","from","as","at","if","so","am","me","we","us","our","you","your","they","them","their","he","she","his","her","its","but","not","no","nor","than","then","too","very","just","only","also","such","some","any","all","each","every","both","few","more","most","other","into","over","under","about","after","before","between","during","through","up","down","out","off","again","further","once","here","there","where","will","would","should","could","may","might","must","shall","have","has","had","being","been","get","got","make","made"]);
 
 const SYNONYMS = {
@@ -1292,42 +1341,94 @@ async function handleAsk(scope, override) {
   renderChatThread(scope);
 }
 
-// ============ ROUTER ============
+// ============================================================
+//  ROUTER  ← wrapped in try/catch so errors are visible
+// ============================================================
 function route() {
-  pauseExamTimer();
-  const hash = location.hash || "#home";
+  try {
+    pauseExamTimer();
+    const hash = location.hash || "#home";
 
-  if (hash.startsWith("#chapter/")) {
-    renderChapter(hash.replace("#chapter/", ""));
-  } else if (hash === "#exams") {
-    renderExamCentre();
-  } else if (hash.startsWith("#exam-instructions/")) {
-    renderExamInstructions(hash.replace("#exam-instructions/", ""));
-  } else if (hash.startsWith("#exam/")) {
-    renderExam(hash.replace("#exam/", ""));
-  } else if (hash === "#tracker") {
-    renderTrackerDashboard();
-  } else {
-    renderHome();
+    if (hash.startsWith("#chapter/")) {
+      renderChapter(hash.replace("#chapter/", ""));
+    } else if (hash === "#exams") {
+      renderExamCentre();
+    } else if (hash.startsWith("#exam-instructions/")) {
+      renderExamInstructions(hash.replace("#exam-instructions/", ""));
+    } else if (hash.startsWith("#exam/")) {
+      renderExam(hash.replace("#exam/", ""));
+    } else if (hash === "#tracker") {
+      renderTrackerDashboard();
+    } else {
+      renderHome();
+    }
+    if (window.innerWidth <= 800) $("#sidebar")?.classList.remove("open");
+  } catch (err) {
+    console.error("[Stack] Route error:", err);
+    const main = $("#main");
+    if (main) {
+      main.innerHTML = `<div class="empty">
+        <h2>⚠️ Something went wrong</h2>
+        <p>${escapeHtml(err.message || String(err))}</p>
+        <p style="margin-top:16px"><a href="#home" class="btn btn-primary">Go to Dashboard</a></p>
+        <p style="margin-top:12px;font-size:13px">Open DevTools (F12) → Console for the full error.</p>
+      </div>`;
+    }
   }
-
-  if (window.innerWidth <= 800) $("#sidebar").classList.remove("open");
 }
 
-// ============ SEARCH ============
-$("#searchInput").addEventListener("input", e => {
-  const q = e.target.value.trim().toLowerCase();
-  if (!q) { renderHome(); return; }
-  const results = CHAPTERS.filter(ch => ch.title.toLowerCase().includes(q) || ch.summary.toLowerCase().includes(q) || ch.notes.toLowerCase().includes(q));
-  $("#main").innerHTML = `<div class="dashboard-header"><h1>Search results</h1><p>${results.length} topic(s) match "${escapeHtml(q)}"</p></div>
-    <div class="card-grid">${results.map(ch => `<div class="card" data-chapter="${ch.id}"><div class="card-top"><span class="chapter-num">${escapeHtml(ch.number)}</span></div><h3>${escapeHtml(ch.title)}</h3><p>${escapeHtml(ch.summary)}</p></div>`).join("") || `<div class="empty"><h2>No matches</h2><p>Try a different keyword.</p></div>`}</div>`;
-  $$(".card").forEach(c => c.addEventListener("click", () => { location.hash = `#chapter/${c.dataset.chapter}`; }));
+// ============================================================
+//  SEARCH
+// ============================================================
+const searchInput = $("#searchInput");
+if (searchInput) {
+  searchInput.addEventListener("input", e => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { renderHome(); return; }
+    const results = CHAPTERS.filter(ch => ch.title.toLowerCase().includes(q) || ch.summary.toLowerCase().includes(q) || ch.notes.toLowerCase().includes(q));
+    $("#main").innerHTML = `<div class="dashboard-header"><h1>Search results</h1><p>${results.length} topic(s) match "${escapeHtml(q)}"</p></div>
+      <div class="card-grid">${results.map(ch => `<div class="card" data-chapter="${ch.id}"><div class="card-top"><span class="chapter-num">${escapeHtml(ch.number)}</span></div><h3>${escapeHtml(ch.title)}</h3><p>${escapeHtml(ch.summary)}</p></div>`).join("") || `<div class="empty"><h2>No matches</h2><p>Try a different keyword.</p></div>`}</div>`;
+    $$(".card").forEach(c => c.addEventListener("click", () => { location.hash = `#chapter/${c.dataset.chapter}`; }));
+  });
+}
+
+// ============================================================
+//  BOOT — order matters: nav delegation FIRST, then everything else
+// ============================================================
+
+// 1. GLOBAL NAV DELEGATION — attached before anything else can fail
+document.addEventListener("click", (e) => {
+  const navLink = e.target.closest('a[data-nav]');
+  if (navLink) {
+    e.preventDefault();
+    const nav = navLink.getAttribute("data-nav");
+    if (nav === "home") location.hash = "#home";
+    else if (nav === "exams") location.hash = "#exams";
+    else if (nav === "tracker") location.hash = "#tracker";
+    return;
+  }
+  // Auto-handle any plain hash link (chapters, "back" links, etc.)
+  const hashLink = e.target.closest('a[href^="#"]');
+  if (hashLink && hashLink.getAttribute("href").length > 1) {
+    // Native hash navigation works; no need to prevent default
+  }
 });
 
-// ============ BOOT ============
+// 2. Hashchange listener
 window.addEventListener("hashchange", route);
-$("#menuBtn").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
-$("#resetBtn").addEventListener("click", () => {
+
+// 3. Menu / theme / reset / FAB — all null-guarded
+const menuBtn = $("#menuBtn");
+if (menuBtn) menuBtn.addEventListener("click", () => $("#sidebar")?.classList.toggle("open"));
+
+const themeBtn = $("#themeBtn");
+if (themeBtn) themeBtn.addEventListener("click", () => {
+  const isDark = document.documentElement.classList.toggle("dark");
+  localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
+});
+
+const resetBtn = $("#resetBtn");
+if (resetBtn) resetBtn.addEventListener("click", () => {
   if (!confirm("Reset all progress, exams and tracker data? Cannot be undone.")) return;
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(TRACKER_KEY);
@@ -1338,19 +1439,24 @@ $("#resetBtn").addEventListener("click", () => {
   showToast("Progress reset");
 });
 
-$$('[data-nav="home"]').forEach(el => el.addEventListener("click", e => { if (el.tagName === "A") { e.preventDefault(); location.hash = "#home"; } }));
-$$('[data-nav="exams"]').forEach(el => el.addEventListener("click", e => { if (el.tagName === "A") { e.preventDefault(); location.hash = "#exams"; } }));
-$$('[data-nav="tracker"]').forEach(el => el.addEventListener("click", e => { if (el.tagName === "A") { e.preventDefault(); location.hash = "#tracker"; } }));
+const aiFab = $("#aiFab");
+if (aiFab) aiFab.addEventListener("click", openChatDrawer);
 
-// FAB & drawer
-$("#aiFab").addEventListener("click", openChatDrawer);
-$("#closeDrawer").addEventListener("click", closeChatDrawer);
-$("#chatOverlay").addEventListener("click", closeChatDrawer);
+const closeDrawerBtn = $("#closeDrawer");
+if (closeDrawerBtn) closeDrawerBtn.addEventListener("click", closeChatDrawer);
 
-function updateOffline() { $("#offlinePill").hidden = navigator.onLine; }
+const chatOverlay = $("#chatOverlay");
+if (chatOverlay) chatOverlay.addEventListener("click", closeChatDrawer);
+
+// 4. Online/offline
+function updateOffline() {
+  const pill = $("#offlinePill");
+  if (pill) pill.hidden = navigator.onLine;
+}
 window.addEventListener("online", updateOffline);
 window.addEventListener("offline", updateOffline);
 
+// 5. Service worker
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").then(reg => {
@@ -1363,12 +1469,35 @@ if ("serviceWorker" in navigator) {
           }
         };
       };
-    }).catch(() => showToast("Offline mode failed to start."));
+    }).catch(err => {
+      console.warn("[Stack] SW registration failed:", err);
+    });
   });
 }
 
-migrateStorage();
-applyTheme();
-renderSidebar();
-updateOffline();
-route();
+// 6. Boot the app
+try {
+  migrateStorage();
+  applyTheme();
+  renderSidebar();
+  updateOffline();
+  route();
+} catch (err) {
+  console.error("[Stack] Boot error:", err);
+  const main = $("#main");
+  if (main) {
+    main.innerHTML = `<div class="empty">
+      <h2>⚠️ Startup error</h2>
+      <p>${escapeHtml(err.message || String(err))}</p>
+      <p style="margin-top:16px"><button class="btn btn-primary" onclick="location.reload()">Reload</button></p>
+    </div>`;
+  }
+}
+
+// 7. Diagnostic — open DevTools (F12) to confirm
+console.info(
+  "%c[Stack] v2.1 booted",
+  "background:#2563eb;color:#fff;padding:2px 8px;border-radius:4px;font-weight:700"
+);
+console.info("[Stack] Exams loaded:", typeof EXAM_PAPERS !== "undefined" ? `${EXAM_PAPERS.length} papers` : "❌ exams.js NOT loaded");
+console.info("[Stack] Chapters loaded:", typeof CHAPTERS !== "undefined" ? `${CHAPTERS.length} chapters` : "❌ content.js NOT loaded");
