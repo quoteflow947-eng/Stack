@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stack — Study smarter</title>
+<meta name="description" content="Read the notes. Take the quiz. Ask Stack AI.">
+<meta name="theme-color" content="#2563eb">
+<link rel="manifest" href="manifest.webmanifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <button class="menu-btn" id="menuBtn" aria-label="Open menu">☰</button>
+  <a href="#" class="brand" data-nav="home">
+    <span class="brand-mark">▦</span>
+    <span class="brand-text">Stack</span>
+  </a>
+  <div class="search-wrap">
+    <input type="search" id="searchInput" placeholder="Search notes and quizzes…" autocomplete="off">
+  </div>
+  <div class="topbar-actions">
+    <span class="offline-pill" id="offlinePill" hidden>Offline</span>
+    <button class="icon-btn" id="themeBtn" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <aside class="sidebar" id="sidebar">
+    <nav>
+      <a href="#" class="nav-item" data-nav="home">
+        <span class="nav-icon">⌂</span><span>Dashboard</span>
+      </a>
+      <a href="#" class="nav-item" data-nav="timetable">
+        <span class="nav-icon">📅</span><span>Exam Timetable</span>
+      </a>
+      <a href="#" class="nav-item" data-nav="tracker">
+        <span class="nav-icon">📊</span><span>Mark Tracker</span>
+      </a>
+      <a href="#" class="nav-item" data-nav="ask">
+        <span class="nav-icon">🤖</span><span>Ask Stack AI</span>
+      </a>
+      <div id="chapterList"></div>
+      <div class="nav-heading">Settings</div>
+      <button class="nav-item reset-btn" id="resetBtn">
+        <span class="nav-icon">↺</span><span>Reset progress</span>
+      </button>
+    </nav>
+  </aside>
+
+  <main class="main" id="main">
+    <!-- Rendered by app.js -->
+  </main>
+
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="content.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
