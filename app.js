@@ -179,14 +179,11 @@ function mdToHtml(md) {
 function renderSidebar() {
   const list = $("#chapterList");
   const progress = getProgress();
-
   const modules = [...new Set(CHAPTERS.map(c => c.module))];
-
   let html = "";
   modules.forEach(mod => {
     html += `<div class="nav-heading">${escapeHtml(mod)}</div>`;
     const modChapters = CHAPTERS.filter(c => c.module === mod);
-
     html += modChapters.map(ch => {
       const p = progress[ch.id];
       const done = p && p.best >= Math.ceil(p.total * 0.8);
@@ -197,7 +194,6 @@ function renderSidebar() {
       </a>`;
     }).join("");
   });
-
   list.innerHTML = html;
 }
 
@@ -206,7 +202,6 @@ function renderHome() {
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
   $('[data-nav="home"]').classList.add("active");
-
   const modules = [...new Set(CHAPTERS.map(c => c.module))];
 
   let html = `
@@ -253,11 +248,9 @@ function renderHome() {
 
   modules.forEach(mod => {
     const modChapters = CHAPTERS.filter(c => c.module === mod);
-
     html += `<div class="module-section">`;
     html += `<div class="module-title">${escapeHtml(mod)}</div>`;
     html += `<div class="card-grid">`;
-
     html += modChapters.map(ch => {
       const p = progress[ch.id];
       const pct = p ? Math.round((p.best / p.total) * 100) : 0;
@@ -276,18 +269,15 @@ function renderHome() {
         </div>
       </div>`;
     }).join("");
-
     html += `</div></div>`;
   });
 
   $("#main").innerHTML = html;
-
   $$(".card").forEach(c => c.addEventListener("click", () => {
     location.hash = `#chapter/${c.dataset.chapter}`;
   }));
 }
 
-// Group the timetable by module so both papers show together.
 function renderTimetableGroupsHtml() {
   const groups = {};
   EXAM_TIMETABLE.forEach(ex => {
@@ -337,7 +327,6 @@ function renderChapter(id) {
     $$(".tab").forEach(x => x.classList.toggle("active", x === t));
     renderTab();
   }));
-
   renderTab();
 }
 
@@ -365,7 +354,6 @@ function renderQuiz(ch) {
       reviewing: false
     };
   }
-
   const body = $("#chapterBody");
   const total = quizState.questions.length;
 
@@ -374,7 +362,6 @@ function renderQuiz(ch) {
     quizState.questions.forEach((q, i) => {
       const userAns = quizState.answers[i];
       const isCorrect = userAns === q.answer;
-
       reviewHtml += `<div class="review-item">
         <div class="q-text">${i+1}. ${escapeHtml(q.q)}</div>
         <div class="a-row ${isCorrect ? 'correct' : 'wrong'}">
@@ -389,14 +376,12 @@ function renderQuiz(ch) {
         </div>
       </div>`;
     });
-
     body.innerHTML = reviewHtml + `
       <div class="quiz-actions" style="justify-content:center; margin-top:32px">
         <button class="btn btn-primary" id="retryBtn">Retake Quiz</button>
         <button class="btn" id="backToScoreBtn">Back to Score</button>
       </div>
     `;
-
     $("#retryBtn").addEventListener("click", () => { quizState = null; renderQuiz(ch); });
     $("#backToScoreBtn").addEventListener("click", () => { quizState.reviewing = false; renderQuiz(ch); });
     return;
@@ -406,7 +391,6 @@ function renderQuiz(ch) {
     const score = quizState.answers.filter((a, i) => a === quizState.questions[i].answer).length;
     const pct = Math.round((score / total) * 100);
     const msg = pct >= 80 ? "Excellent work!" : pct >= 50 ? "Good — review the wrong answers." : "Re-read the notes and try again.";
-
     body.innerHTML = `
       <div class="score-card">
         <div class="score-big">${score}/${total}</div>
@@ -418,14 +402,8 @@ function renderQuiz(ch) {
         </div>
       </div>
     `;
-
-    $("#reviewBtn").addEventListener("click", () => {
-      quizState.reviewing = true;
-      renderQuiz(ch);
-    });
-    $("#retryBtn").addEventListener("click", () => {
-      quizState = null; renderQuiz(ch);
-    });
+    $("#reviewBtn").addEventListener("click", () => { quizState.reviewing = true; renderQuiz(ch); });
+    $("#retryBtn").addEventListener("click", () => { quizState = null; renderQuiz(ch); });
     return;
   }
 
@@ -461,7 +439,6 @@ function renderQuiz(ch) {
     quizState.answers[quizState.index] = Number(btn.dataset.idx);
     renderQuiz(ch);
   }));
-
   $("#nextBtn").addEventListener("click", () => {
     if (quizState.index === total - 1) {
       quizState.done = true;
@@ -475,9 +452,8 @@ function renderQuiz(ch) {
 }
 
 // ============================================================
-//  AI TUTOR — grounded retrieval engine over ALL course notes
+//  AI TUTOR
 // ============================================================
-
 const STOPWORDS = new Set([
   "the","a","an","is","are","was","were","of","to","in","on","for","and","or","what","how","why","when",
   "which","who","does","do","can","i","my","with","that","this","it","be","by","from","as","at","if","so",
@@ -543,44 +519,27 @@ const SYNONYMS = {
 };
 
 const SUFFIX_RULES = [
-  [/ies$/, "y"],
-  [/sses$/, "ss"],
-  [/edly$/, ""],
-  [/ing$/, ""],
-  [/ed$/, ""],
-  [/ment$/, ""],
-  [/ness$/, ""],
-  [/tion$/, "t"],
-  [/sion$/, "s"],
-  [/ly$/, ""],
-  [/est$/, ""],
-  [/es$/, ""],
-  [/s$/, ""]
+  [/ies$/, "y"], [/sses$/, "ss"], [/edly$/, ""], [/ing$/, ""], [/ed$/, ""], [/ment$/, ""],
+  [/ness$/, ""], [/tion$/, "t"], [/sion$/, "s"], [/ly$/, ""], [/est$/, ""], [/es$/, ""], [/s$/, ""]
 ];
 
 function stem(word) {
   if (word.length < 4) return word;
   for (const [re, rep] of SUFFIX_RULES) {
-    if (re.test(word)) {
-      const s = word.replace(re, rep);
-      if (s.length >= 3) return s;
-    }
+    if (re.test(word)) { const s = word.replace(re, rep); if (s.length >= 3) return s; }
   }
   return word;
 }
 
 function tokenize(text) {
-  return String(text).toLowerCase()
-    .replace(/[^a-z0-9\s&'-]/g, " ")
-    .split(/\s+/)
+  return String(text).toLowerCase().replace(/[^a-z0-9\s&'-]/g, " ").split(/\s+/)
     .filter(w => w && w.length > 1 && !STOPWORDS.has(w));
 }
 
 function expandTerms(terms) {
   const out = new Set();
   for (const t of terms) {
-    out.add(t);
-    out.add(stem(t));
+    out.add(t); out.add(stem(t));
     const syn = SYNONYMS[t] || SYNONYMS[stem(t)];
     if (syn) {
       for (const s of syn) {
@@ -598,9 +557,7 @@ function buildIndex() {
   if (TUTOR_INDEX) return TUTOR_INDEX;
   const sections = [];
   const docFreq = {};
-
   for (const ch of CHAPTERS) {
-    // Break notes into ## sections
     const parts = ch.notes.split(/^##\s+/m);
     parts.forEach((part, i) => {
       if (!part.trim()) return;
@@ -612,42 +569,23 @@ function buildIndex() {
       const stems = new Set(tokens.map(stem));
       for (const s of stems) docFreq[s] = (docFreq[s] || 0) + 1;
       sections.push({
-        chapterId: ch.id,
-        chapterNumber: ch.number,
-        chapterTitle: ch.title,
-        module: ch.module,
-        heading,
-        body,
-        text,
-        tokens,
-        stems,
-        lower: text.toLowerCase(),
-        isFaq: false
+        chapterId: ch.id, chapterNumber: ch.number, chapterTitle: ch.title,
+        module: ch.module, heading, body, text, tokens, stems,
+        lower: text.toLowerCase(), isFaq: false
       });
     });
-
-    // FAQs are curated high-value answers — index them too
     (ch.faq || []).forEach(f => {
       const text = f.q + " " + f.a;
       const tokens = tokenize(text);
       const stems = new Set(tokens.map(stem));
       for (const s of stems) docFreq[s] = (docFreq[s] || 0) + 1;
       sections.push({
-        chapterId: ch.id,
-        chapterNumber: ch.number,
-        chapterTitle: ch.title,
-        module: ch.module,
-        heading: "Q: " + f.q,
-        body: f.a,
-        text,
-        tokens,
-        stems,
-        lower: text.toLowerCase(),
-        isFaq: true
+        chapterId: ch.id, chapterNumber: ch.number, chapterTitle: ch.title,
+        module: ch.module, heading: "Q: " + f.q, body: f.a, text, tokens, stems,
+        lower: text.toLowerCase(), isFaq: true
       });
     });
   }
-
   TUTOR_INDEX = { sections, docFreq, N: sections.length };
   return TUTOR_INDEX;
 }
@@ -657,27 +595,15 @@ function scoreSection(section, queryStems, queryTerms, preferredChapterId) {
   for (const qs of queryStems) {
     if (section.stems.has(qs)) {
       const df = TUTOR_INDEX.docFreq[qs] || 1;
-      const idf = Math.log(1 + TUTOR_INDEX.N / df);
-      score += idf;
+      score += Math.log(1 + TUTOR_INDEX.N / df);
     }
   }
-  // Exact term presence bonus (substring)
-  for (const qt of queryTerms) {
-    if (section.lower.includes(qt)) score += 0.3;
-  }
-  // Heading boost
+  for (const qt of queryTerms) if (section.lower.includes(qt)) score += 0.3;
   const headingLower = section.heading.toLowerCase();
-  for (const qt of queryTerms) {
-    if (headingLower.includes(qt)) score += 1.0;
-  }
-  // Chapter title boost
+  for (const qt of queryTerms) if (headingLower.includes(qt)) score += 1.0;
   const chTitleLower = section.chapterTitle.toLowerCase();
-  for (const qt of queryTerms) {
-    if (chTitleLower.includes(qt)) score += 0.5;
-  }
-  // FAQ boost
+  for (const qt of queryTerms) if (chTitleLower.includes(qt)) score += 0.5;
   if (section.isFaq) score *= 1.3;
-  // Preferred chapter boost (contextual)
   if (preferredChapterId && section.chapterId === preferredChapterId) score *= 1.4;
   return score;
 }
@@ -712,11 +638,9 @@ function aiAnswer(question, preferredChapterId) {
       suggestions: defaultSuggestions(preferredChapterId)
     };
   }
-
   buildIndex();
   const queryTerms = rawTokens;
   const queryStems = expandTerms(rawTokens);
-
   const scored = TUTOR_INDEX.sections
     .map(s => ({ section: s, score: scoreSection(s, queryStems, queryTerms, preferredChapterId) }))
     .filter(x => x.score > 0)
@@ -732,27 +656,19 @@ function aiAnswer(question, preferredChapterId) {
   const top = scored.slice(0, 3);
   const best = top[0].section;
   const bestChapter = CHAPTERS.find(c => c.id === best.chapterId);
-
   let answerBody;
-  if (best.isFaq) {
-    answerBody = best.body;
-  } else {
-    answerBody = extractRelevantSentences(best.body, queryTerms, 4);
-  }
-
+  if (best.isFaq) answerBody = best.body;
+  else answerBody = extractRelevantSentences(best.body, queryTerms, 4);
   const heading = best.isFaq ? best.heading.replace(/^Q:\s*/, "") : best.heading;
   const text = `**${heading}**\n\n${answerBody}`;
 
-  // Build related suggestions from the other top-scoring sections
   const related = top.slice(1).map(x => x.section).filter(s => s.heading !== best.heading);
   const suggestions = [];
   related.forEach(s => {
     if (s.isFaq) suggestions.push(s.heading.replace(/^Q:\s*/, ""));
     else suggestions.push(`${s.chapterTitle}: ${s.heading}`);
   });
-  if (!suggestions.length) {
-    (bestChapter.faq || []).slice(0, 3).forEach(f => suggestions.push(f.q));
-  }
+  if (!suggestions.length) (bestChapter.faq || []).slice(0, 3).forEach(f => suggestions.push(f.q));
 
   return {
     text,
@@ -761,7 +677,6 @@ function aiAnswer(question, preferredChapterId) {
   };
 }
 
-// Optional remote RAG call (disabled by default). Sends top note passages as context.
 async function remoteAnswer(question, chapterScope) {
   buildIndex();
   const queryTerms = tokenize(question);
@@ -785,9 +700,7 @@ async function remoteAnswer(question, chapterScope) {
 // ---------- CHAT UI ----------
 function renderChatInto(container, chapterScope) {
   chatHistory = [];
-  const placeholder = chapterScope
-    ? `Ask about ${chapterScope.title}…`
-    : "Ask anything about your course notes…";
+  const placeholder = chapterScope ? `Ask about ${chapterScope.title}…` : "Ask anything about your course notes…";
   container.innerHTML = `
     <div class="chat-container">
       <div class="chat-thread" id="chatThread"></div>
@@ -805,9 +718,7 @@ function renderChatInto(container, chapterScope) {
   renderChatThread(chapterScope);
 }
 
-function renderAsk(ch) {
-  renderChatInto($("#chapterBody"), ch);
-}
+function renderAsk(ch) { renderChatInto($("#chapterBody"), ch); }
 
 function renderAskGlobal() {
   currentChapter = null;
@@ -865,9 +776,8 @@ function renderChatMessage(msg) {
 function renderChatThread(chapterScope) {
   const thread = $("#chatThread");
   if (!thread) return;
-  if (!chatHistory.length) {
-    thread.innerHTML = emptyChatHtml(chapterScope);
-  } else {
+  if (!chatHistory.length) thread.innerHTML = emptyChatHtml(chapterScope);
+  else {
     thread.innerHTML = chatHistory.map(renderChatMessage).join("");
     thread.scrollTop = thread.scrollHeight;
   }
@@ -890,26 +800,18 @@ async function handleAsk(chapterScope, questionOverride) {
   const q = (questionOverride || input?.value || "").trim();
   if (!q) return;
   if (input) input.value = "";
-
   chatHistory.push({ role: "user", text: q });
   chatHistory.push({ role: "assistant", pending: true });
   renderChatThread(chapterScope);
-
-  // Small delay so the typing indicator feels natural
   await new Promise(r => setTimeout(r, 300));
-
   let result;
   if (TUTOR_ENDPOINT) {
-    try {
-      result = await remoteAnswer(q, chapterScope);
-    } catch (err) {
-      result = aiAnswer(q, chapterScope?.id);
-    }
+    try { result = await remoteAnswer(q, chapterScope); }
+    catch { result = aiAnswer(q, chapterScope?.id); }
   } else {
     result = aiAnswer(q, chapterScope?.id);
   }
-
-  chatHistory.pop(); // remove pending
+  chatHistory.pop();
   chatHistory.push({
     role: "assistant",
     text: result.text,
@@ -919,17 +821,12 @@ async function handleAsk(chapterScope, questionOverride) {
   renderChatThread(chapterScope);
 }
 
-// ============================================================
-//  MARK TRACKER
-// ============================================================
+// ---------- MARK TRACKER ----------
 function getTrackerData() {
   try { return JSON.parse(localStorage.getItem(TRACKER_KEY)) || []; }
   catch { return []; }
 }
-
-function saveTrackerData(data) {
-  localStorage.setItem(TRACKER_KEY, JSON.stringify(data));
-}
+function saveTrackerData(data) { localStorage.setItem(TRACKER_KEY, JSON.stringify(data)); }
 
 window.deleteTrackerAssessment = function(modId, assId) {
   if (!confirm("Delete this assessment?")) return;
@@ -949,39 +846,23 @@ window.deleteTrackerModule = function(modId) {
 };
 
 function calculateModuleStats(mod) {
-  let currentMark = 0;
-  let remainingWeight = 0;
-  let projectedMark = 0;
-
+  let currentMark = 0, remainingWeight = 0, projectedMark = 0;
   if (!mod.assessments) return { current: 0, remaining: 0, projected: 0 };
-
   mod.assessments.forEach(a => {
     const mark = parseFloat(a.mark) || 0;
     const weight = parseFloat(a.weight) || 0;
-
-    if (a.status === 'released') {
-      currentMark += (mark * weight) / 100;
-    } else if (a.status === 'pending') {
+    if (a.status === 'released') currentMark += (mark * weight) / 100;
+    else if (a.status === 'pending') {
       remainingWeight += weight;
-      if (a.mark !== "" && a.mark !== null && !isNaN(mark)) {
-        projectedMark += (mark * weight) / 100;
-      }
+      if (a.mark !== "" && a.mark !== null && !isNaN(mark)) projectedMark += (mark * weight) / 100;
     }
   });
-
-  return {
-    current: currentMark,
-    remaining: remainingWeight,
-    projected: currentMark + projectedMark
-  };
+  return { current: currentMark, remaining: remainingWeight, projected: currentMark + projectedMark };
 }
 
 function renderTracker() {
-  if (activeModuleId) {
-    renderTrackerModule(activeModuleId);
-  } else {
-    renderTrackerDashboard();
-  }
+  if (activeModuleId) renderTrackerModule(activeModuleId);
+  else renderTrackerDashboard();
 }
 
 function renderTrackerDashboard() {
@@ -989,13 +870,9 @@ function renderTrackerDashboard() {
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
   $('[data-nav="tracker"]').classList.add("active");
-
   trackerData = getTrackerData();
 
-  const availableToAdd = CPUT_MODULES.filter(cputMod =>
-    !trackerData.some(t => t.name === cputMod.name)
-  );
-
+  const availableToAdd = CPUT_MODULES.filter(cputMod => !trackerData.some(t => t.name === cputMod.name));
   let availableHtml = availableToAdd.map(mod =>
     `<button class="module-pill" onclick="window.addModuleFromList('${escapeHtml(mod.name)}', '${escapeHtml(mod.code)}')">
       <span class="plus">+</span> ${escapeHtml(mod.name)}
@@ -1029,16 +906,13 @@ function renderTrackerDashboard() {
         <p>Each module has <strong>two 100-mark exam papers</strong>. Click a module to track marks.</p>
       </div>
     </div>
-
     ${availableHtml ? `<div class="available-modules">${availableHtml}</div>` : ''}
-
     <div class="tracker-grid">
       ${cardsHtml || `<div class="empty" style="grid-column: 1/-1;"><h2>No modules tracked yet</h2><p>Click one of the modules above to begin.</p></div>`}
     </div>
   `;
 }
 
-// Small exam-mark summary block for the module card
 function examSummaryHtml(mod) {
   const exams = (mod.assessments || []).filter(a => (a.type || "").startsWith("Exam"));
   if (!exams.length) return "";
@@ -1058,9 +932,7 @@ window.addModuleFromList = function(name, code) {
   const now = Date.now();
   trackerData.push({
     id: "mod_" + now,
-    name: name,
-    code: code,
-    // Seed with the two 100-mark exam papers (weight 50% each)
+    name, code,
     assessments: [
       { id: "ass_" + now + "_1", type: "Exam Paper 1", status: "pending", mark: "", weight: 50 },
       { id: "ass_" + now + "_2", type: "Exam Paper 2", status: "pending", mark: "", weight: 50 }
@@ -1071,21 +943,14 @@ window.addModuleFromList = function(name, code) {
   showToast(`${name} added — two 100-mark exam papers are ready to track.`);
 };
 
-window.openModule = function(id) {
-  activeModuleId = id;
-  renderTracker();
-};
+window.openModule = function(id) { activeModuleId = id; renderTracker(); };
 
 window.addNewAssessment = function(modId) {
   const mod = trackerData.find(m => m.id === modId);
   if (!mod) return;
-
   mod.assessments.push({
     id: "ass_" + Date.now(),
-    type: "Test",
-    status: "pending",
-    mark: "",
-    weight: ""
+    type: "Test", status: "pending", mark: "", weight: ""
   });
   saveTrackerData(trackerData);
   renderTrackerModule(modId);
@@ -1094,11 +959,9 @@ window.addNewAssessment = function(modId) {
 function renderTrackerModule(modId) {
   const mod = trackerData.find(m => m.id === modId);
   if (!mod) { activeModuleId = null; renderTrackerDashboard(); return; }
-
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
   $('[data-nav="tracker"]').classList.add("active");
-
   const stats = calculateModuleStats(mod);
 
   let rowsHtml = (mod.assessments || []).map(a => `
@@ -1136,11 +999,9 @@ function renderTrackerModule(modId) {
         <p>Each exam paper is worth <strong>100 marks</strong>. Enter the mark (0–100) and its weight.</p>
       </div>
     </div>
-
     <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
       <strong>Released</strong> = actual mark received. <strong>Pending</strong> = exam not yet written or mark not yet received (enter an estimate to include it in the projection).
     </p>
-
     <div class="tracker-table-wrap">
       <table class="tracker-table">
         <thead>
@@ -1157,14 +1018,10 @@ function renderTrackerModule(modId) {
         </tbody>
       </table>
     </div>
-
     <div style="display: flex; gap: 16px; margin-bottom: 32px;">
       <button class="btn btn-primary" onclick="window.addNewAssessment('${modId}')" style="flex: 1;">+ Add Assessment</button>
     </div>
-
-    <div class="tracker-summary-box">
-      ${summaryHtml(stats)}
-    </div>
+    <div class="tracker-summary-box">${summaryHtml(stats)}</div>
   `;
 }
 
@@ -1189,24 +1046,19 @@ function summaryHtml(stats) {
   `;
 }
 
-window.backToTracker = function() {
-  activeModuleId = null;
-  renderTrackerDashboard();
-};
+window.backToTracker = function() { activeModuleId = null; renderTrackerDashboard(); };
 
 window.updateAss = function(el) {
   const modId = el.dataset.mod;
   const assId = el.dataset.ass;
   const field = el.dataset.field;
   const val = el.value;
-
   const mod = trackerData.find(m => m.id === modId);
   if (mod) {
     const ass = mod.assessments.find(a => a.id === assId);
     if (ass) {
       ass[field] = val;
       saveTrackerData(trackerData);
-
       const stats = calculateModuleStats(mod);
       const summaryBox = $(".tracker-summary-box");
       if (summaryBox) summaryBox.innerHTML = summaryHtml(stats);
@@ -1214,13 +1066,36 @@ window.updateAss = function(el) {
   }
 };
 
+// ---------- SEARCH ----------
+$("#searchInput").addEventListener("input", (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!q) { renderHome(); return; }
+  const results = CHAPTERS.filter(ch =>
+    ch.title.toLowerCase().includes(q) ||
+    ch.summary.toLowerCase().includes(q) ||
+    ch.notes.toLowerCase().includes(q)
+  );
+  $("#main").innerHTML = `
+    <div class="dashboard-header"><h1>Search results</h1><p>${results.length} topic(s) match "${escapeHtml(q)}"</p></div>
+    <div class="card-grid">
+      ${results.map(ch => `<div class="card" data-chapter="${ch.id}">
+        <div class="card-top"><span class="chapter-num">${escapeHtml(ch.number)}</span></div>
+        <h3>${escapeHtml(ch.title)}</h3>
+        <p>${escapeHtml(ch.summary)}</p>
+      </div>`).join("") || `<div class="empty"><h2>No matches</h2><p>Try a different keyword.</p></div>`}
+    </div>
+  `;
+  $$(".card").forEach(c => c.addEventListener("click", () => {
+    location.hash = `#chapter/${c.dataset.chapter}`;
+  }));
+});
+
 // ---------- ROUTER ----------
 function renderTimetable() {
   currentChapter = null;
   activeModuleId = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
   $('[data-nav="timetable"]').classList.add("active");
-
   $("#main").innerHTML = `
     <div class="dashboard-header">
       <h1>Exam Timetable</h1>
@@ -1236,21 +1111,11 @@ function renderTimetable() {
 
 function route() {
   const hash = location.hash || "#home";
-  if (hash.startsWith("#chapter/")) {
-    activeModuleId = null;
-    renderChapter(hash.replace("#chapter/", ""));
-  } else if (hash === "#ask") {
-    activeModuleId = null;
-    renderAskGlobal();
-  } else if (hash === "#timetable") {
-    activeModuleId = null;
-    renderTimetable();
-  } else if (hash === "#tracker") {
-    renderTracker();
-  } else {
-    activeModuleId = null;
-    renderHome();
-  }
+  if (hash.startsWith("#chapter/")) { activeModuleId = null; renderChapter(hash.replace("#chapter/", "")); }
+  else if (hash === "#ask") { activeModuleId = null; renderAskGlobal(); }
+  else if (hash === "#timetable") { activeModuleId = null; renderTimetable(); }
+  else if (hash === "#tracker") renderTracker();
+  else { activeModuleId = null; renderHome(); }
   if (window.innerWidth <= 800) $("#sidebar").classList.remove("open");
 }
 
@@ -1275,22 +1140,16 @@ function updateOffline() { $("#offlinePill").hidden = navigator.onLine; }
 window.addEventListener("online", updateOffline);
 window.addEventListener("offline", updateOffline);
 
-// Register Service Worker for Offline Use
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").then(reg => {
       console.log("Service Worker registered. Scope:", reg.scope);
-
       reg.onupdatefound = () => {
         const installingWorker = reg.installing;
         installingWorker.onstatechange = () => {
           if (installingWorker.state === 'installed') {
-            if (navigator.serviceWorker.controller) {
-              showToast("New update available! Refresh to apply.");
-            } else {
-              console.log("App cached and ready for offline use!");
-              showToast("App ready for offline use!");
-            }
+            if (navigator.serviceWorker.controller) showToast("New update available! Refresh to apply.");
+            else showToast("App ready for offline use!");
           }
         };
       };
