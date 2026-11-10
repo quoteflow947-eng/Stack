@@ -1,32 +1,16 @@
-/* Stack — application logic.
-   All state lives in localStorage. Works fully offline. */
+/* Stack — application logic v2. All state in localStorage. Fully offline. */
 
-const TUTOR_ENDPOINT = ""; // Optional: set to your RAG/AI endpoint to enable remote answers.
 const STORAGE_KEY = "stack:progress";
 const THEME_KEY = "stack:theme";
 const TRACKER_KEY = "stack:tracker_v5";
+const EXAMS_KEY = "stack:exams_v1";
 
-// The 5 CPUT modules
 const CPUT_MODULES = [
   { name: "Communication", code: "CMM157S" },
   { name: "Retailing 1", code: "RET150S" },
   { name: "Retail Operations Management 1", code: "ROM150S" },
   { name: "Retail Financial Management 1", code: "RFM150S" },
   { name: "Business Computer Applications", code: "BCA157S" }
-];
-
-// Every module has TWO exam papers — each worth 100 marks.
-const EXAM_TIMETABLE = [
-  { date: "24 November 2026", module: "Business Computer Applications", paper: "Paper 1" },
-  { date: "08 December 2026", module: "Business Computer Applications", paper: "Paper 2" },
-  { date: "25 November 2026", module: "Communication", paper: "Paper 1" },
-  { date: "09 December 2026", module: "Communication", paper: "Paper 2" },
-  { date: "26 November 2026", module: "Retail Operations Management 1", paper: "Paper 1" },
-  { date: "10 December 2026", module: "Retail Operations Management 1", paper: "Paper 2" },
-  { date: "30 November 2026", module: "Retailing 1", paper: "Paper 1" },
-  { date: "11 December 2026", module: "Retailing 1", paper: "Paper 2" },
-  { date: "07 December 2026", module: "Retail Financial Management 1", paper: "Paper 1" },
-  { date: "14 December 2026", module: "Retail Financial Management 1", paper: "Paper 2" }
 ];
 
 const QUICK_START_QUESTIONS = [
@@ -41,24 +25,21 @@ const QUICK_START_QUESTIONS = [
 let currentChapter = null;
 let currentTab = "notes";
 let quizState = null;
-
-// Tracker State
 let trackerData = [];
 let activeModuleId = null;
-
-// Chat State
 let chatHistory = [];
+
+// Exam state (in-memory mirrors)
+let currentExam = null;
+let currentExamQuestionIndex = 0;
+let examTimerHandle = null;
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-// One-time migration from the old "brainstack:*" keys so existing users keep their data.
+// ============ STORAGE ============
 function migrateStorage() {
-  const pairs = [
-    ["brainstack:progress", STORAGE_KEY],
-    ["brainstack:theme", THEME_KEY],
-    ["brainstack:tracker_v5", TRACKER_KEY]
-  ];
+  const pairs = [["brainstack:progress", STORAGE_KEY], ["brainstack:theme", THEME_KEY], ["brainstack:tracker_v5", TRACKER_KEY]];
   pairs.forEach(([oldK, newK]) => {
     if (!localStorage.getItem(newK)) {
       const old = localStorage.getItem(oldK);
@@ -67,10 +48,35 @@ function migrateStorage() {
   });
 }
 
+function getProgress() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
+}
+function saveProgress(p) { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); }
+
+function getTrackerData() {
+  try { return JSON.parse(localStorage.getItem(TRACKER_KEY)) || []; } catch { return []; }
+}
+function saveTrackerData(d) { localStorage.setItem(TRACKER_KEY, JSON.stringify(d)); }
+
+function getExamsData() {
+  try { return JSON.parse(localStorage.getItem(EXAMS_KEY)) || {}; } catch { return {}; }
+}
+function saveExamsData(d) { localStorage.setItem(EXAMS_KEY, JSON.stringify(d)); }
+
+function getExamState(paperId) {
+  const all = getExamsData();
+  return all[paperId] || null;
+}
+function saveExamState(paperId, state) {
+  const all = getExamsData();
+  all[paperId] = state;
+  saveExamsData(all);
+}
+
+// ============ HELPERS ============
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
-
 function shuffle(arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -79,7 +85,6 @@ function shuffle(arr) {
   }
   return a;
 }
-
 function showToast(msg, ms = 3000) {
   const t = $("#toast");
   t.textContent = msg;
@@ -87,35 +92,14 @@ function showToast(msg, ms = 3000) {
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
-
-function getProgress() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
-  catch { return {}; }
-}
-function saveProgress(p) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
-}
-function setChapterScore(id, score, total) {
-  const p = getProgress();
-  const prev = p[id] || { best: 0, attempts: 0 };
-  p[id] = {
-    best: Math.max(prev.best, score),
-    total,
-    attempts: prev.attempts + 1
-  };
-  saveProgress(p);
-  renderSidebar();
-}
-function resetProgress() {
-  if (!confirm("Reset all quiz progress and tracker data? This cannot be undone.")) return;
-  localStorage.removeItem(STORAGE_KEY);
-  localStorage.removeItem(TRACKER_KEY);
-  renderSidebar();
-  if (currentChapter) renderChapter(currentChapter.id);
-  if (location.hash === "#tracker") renderTrackerDashboard();
-  showToast("Progress reset");
+function formatTime(seconds) {
+  if (seconds == null) return "--:--";
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
+// ============ THEME ============
 function applyTheme() {
   const theme = localStorage.getItem(THEME_KEY) || "light";
   document.documentElement.classList.toggle("dark", theme === "dark");
@@ -125,34 +109,27 @@ $("#themeBtn").addEventListener("click", () => {
   localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
 });
 
+// ============ MARKDOWN ============
 function mdToHtml(md) {
   const lines = md.trim().split("\n");
   const out = [];
-  let inList = false, listType = null;
-  let inTable = false, tableRows = [];
-
+  let inList = false, listType = null, inTable = false, tableRows = [];
   function inline(t) {
     return escapeHtml(t)
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/\*(.+?)\*/g, "<em>$1</em>")
       .replace(/`(.+?)`/g, "<code>$1</code>");
   }
-  function closeList() {
-    if (inList) { out.push(`</${listType}>`); inList = false; listType = null; }
-  }
+  function closeList() { if (inList) { out.push(`</${listType}>`); inList = false; listType = null; } }
   function flushTable() {
     if (!inTable) return;
     const cells = (r) => r.split("|").slice(1, -1).map(c => c.trim());
     const [header, ...rows] = tableRows;
     const ths = cells(header).map(c => `<th>${inline(c)}</th>`).join("");
-    const trs = rows
-      .filter(r => !/^\|[\s\-|:]+\|$/.test(r))
-      .map(r => `<tr>${cells(r).map(c => `<td>${inline(c)}</td>`).join("")}</tr>`)
-      .join("");
+    const trs = rows.filter(r => !/^\|[\s\-|:]+\|$/.test(r)).map(r => `<tr>${cells(r).map(c => `<td>${inline(c)}</td>`).join("")}</tr>`).join("");
     out.push(`<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`);
     inTable = false; tableRows = [];
   }
-
   for (const line of lines) {
     const t = line.trim();
     if (!t) { closeList(); flushTable(); continue; }
@@ -165,17 +142,16 @@ function mdToHtml(md) {
     else if (/^- /.test(t)) {
       if (!inList || listType !== "ul") { closeList(); out.push("<ul>"); inList = true; listType = "ul"; }
       out.push(`<li>${inline(t.slice(2))}</li>`);
-    }
-    else if (/^\d+\. /.test(t)) {
+    } else if (/^\d+\. /.test(t)) {
       if (!inList || listType !== "ol") { closeList(); out.push("<ol>"); inList = true; listType = "ol"; }
       out.push(`<li>${inline(t.replace(/^\d+\.\s+/, ""))}</li>`);
-    }
-    else { closeList(); out.push(`<p>${inline(t)}</p>`); }
+    } else { closeList(); out.push(`<p>${inline(t)}</p>`); }
   }
   closeList(); flushTable();
   return out.join("\n");
 }
 
+// ============ SIDEBAR ============
 function renderSidebar() {
   const list = $("#chapterList");
   const progress = getProgress();
@@ -197,106 +173,93 @@ function renderSidebar() {
   list.innerHTML = html;
 }
 
+// ============ HOME ============
 function renderHome() {
-  const progress = getProgress();
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
-  $('[data-nav="home"]').classList.add("active");
+  $('[data-nav="home"]')?.classList.add("active");
+
   const modules = [...new Set(CHAPTERS.map(c => c.module))];
+  const examsData = getExamsData();
+  const inProgress = Object.entries(examsData).find(([id, st]) => st.status === "in_progress");
+  const recent = Object.entries(examsData)
+    .filter(([id, st]) => st.status === "submitted")
+    .sort((a, b) => (b[1].submittedAt || 0) - (a[1].submittedAt || 0))
+    .slice(0, 3);
 
   let html = `
     <div class="dashboard-header">
       <h1>Your Study Dashboard</h1>
-      <p>Read the notes. Take the quiz. Ask Stack AI. All offline-ready.</p>
+      <p>Read the notes. Take the quiz. Sit a full exam. Ask Stack AI.</p>
     </div>
-
+    ${inProgress ? renderContinueExamCard(inProgress) : ""}
     <div class="features-grid">
-      <div class="feature-card">
-        <div class="feature-icon">📚</div>
-        <h4>All-in-One Notes</h4>
-        <p>5 complete modules structured clearly so you can study without flipping through old PDFs.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">⚡</div>
-        <h4>Offline Ready</h4>
-        <p>Study on the bus or without data. Everything is saved to your device automatically.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🧠</div>
-        <h4>Active Recall Quizzes</h4>
-        <p>8-question quizzes per topic with instant scores and full explanations to test your memory.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🤖</div>
-        <h4>AI Tutor</h4>
-        <p>Ask anything. The AI Tutor is grounded in your course notes and finds the exact section you need.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">📊</div>
-        <h4>Mark Tracker</h4>
-        <p>Each module has <strong>two 100-mark exam papers</strong>. Track both and see your projected final mark.</p>
-      </div>
+      <div class="feature-card"><div class="feature-icon">📚</div><h4>All-in-One Notes</h4><p>5 complete modules, structured clearly.</p></div>
+      <div class="feature-card"><div class="feature-icon">⚡</div><h4>Offline Ready</h4><p>Works on the bus, no data needed.</p></div>
+      <div class="feature-card"><div class="feature-icon">✍️</div><h4>Full Exams</h4><p>Two complete 100-mark papers per module.</p></div>
+      <div class="feature-card"><div class="feature-icon">🎯</div><h4>Auto-Marked</h4><p>Instant feedback with rubric-level detail.</p></div>
+      <div class="feature-card"><div class="feature-icon">📊</div><h4>Mark Tracker</h4><p>Every exam score flows into your tracker.</p></div>
     </div>
-
-    <div class="timetable-widget">
-      <h3>📅 Upcoming Exams</h3>
-      <div class="timetable-groups">
-        ${renderTimetableGroupsHtml()}
-      </div>
-    </div>
+    ${recent.length ? `
+    <div class="recent-marks">
+      <h3>Recent exam results</h3>
+      ${recent.map(([id, st]) => {
+        const paper = findExamPaper(id);
+        if (!paper) return "";
+        return `<div class="recent-mark-row">
+          <div>
+            <div class="rm-module">${escapeHtml(paper.module)}</div>
+            <div class="rm-name">${escapeHtml(paper.name)}</div>
+          </div>
+          <div class="rm-score">${Math.round(st.bestScore || st.score || 0)} / 100</div>
+          <a href="#exam/${id}" class="btn btn-text">Review</a>
+        </div>`;
+      }).join("")}
+    </div>` : ""}
   `;
 
   modules.forEach(mod => {
     const modChapters = CHAPTERS.filter(c => c.module === mod);
-    html += `<div class="module-section">`;
-    html += `<div class="module-title">${escapeHtml(mod)}</div>`;
-    html += `<div class="card-grid">`;
+    html += `<div class="module-section"><div class="module-title">${escapeHtml(mod)}</div><div class="card-grid">`;
     html += modChapters.map(ch => {
-      const p = progress[ch.id];
+      const p = getProgress()[ch.id];
       const pct = p ? Math.round((p.best / p.total) * 100) : 0;
       return `<div class="card" data-chapter="${ch.id}">
-        <div class="card-top">
-          <span class="chapter-num">${escapeHtml(ch.number)}</span>
-        </div>
+        <div class="card-top"><span class="chapter-num">${escapeHtml(ch.number)}</span></div>
         <h3>${escapeHtml(ch.title)}</h3>
         <p>${escapeHtml(ch.summary)}</p>
-        <div class="card-progress-wrap">
-          <div class="card-progress-label">
-            <span>Progress</span>
-            <span>${pct}%</span>
-          </div>
-          <div class="card-progress"><div class="card-progress-fill" style="width:${pct}%"></div></div>
-        </div>
+        <div class="card-progress-wrap"><div class="card-progress-label"><span>Quiz progress</span><span>${pct}%</span></div>
+        <div class="card-progress"><div class="card-progress-fill" style="width:${pct}%"></div></div></div>
       </div>`;
     }).join("");
     html += `</div></div>`;
   });
 
   $("#main").innerHTML = html;
-  $$(".card").forEach(c => c.addEventListener("click", () => {
-    location.hash = `#chapter/${c.dataset.chapter}`;
-  }));
+  $$(".card").forEach(c => c.addEventListener("click", () => { location.hash = `#chapter/${c.dataset.chapter}`; }));
 }
 
-function renderTimetableGroupsHtml() {
-  const groups = {};
-  EXAM_TIMETABLE.forEach(ex => {
-    if (!groups[ex.module]) groups[ex.module] = [];
-    groups[ex.module].push(ex);
-  });
-  return Object.entries(groups).map(([mod, exams]) => `
-    <div class="timetable-group">
-      <div class="timetable-group-title">${escapeHtml(mod)}</div>
-      ${exams.map(ex => `
-        <div class="timetable-item">
-          <span class="timetable-date">${escapeHtml(ex.date)}</span>
-          <span class="timetable-module">${escapeHtml(ex.paper)} <span class="timetable-marks">· 100 marks</span></span>
-        </div>
-      `).join("")}
+function renderContinueExamCard([paperId, state]) {
+  const paper = findExamPaper(paperId);
+  if (!paper) return "";
+  return `<div class="continue-exam-card">
+    <div>
+      <div class="continue-eyebrow">Resume exam</div>
+      <div class="continue-title">${escapeHtml(paper.module)} · ${escapeHtml(paper.name)}</div>
+      <div class="continue-sub">In progress · ${Object.values(state.answers || {}).filter(a => a && !isEmptyAnswer(a)).length} of ${paper.questions.length} answered</div>
     </div>
-  `).join("");
+    <a href="#exam/${paperId}" class="btn btn-primary">Continue →</a>
+  </div>`;
 }
 
+function isEmptyAnswer(a) {
+  if (a == null) return true;
+  if (typeof a === "string") return !a.trim();
+  if (typeof a === "object") return Object.values(a).every(v => v == null || v === "");
+  return false;
+}
+
+// ============ CHAPTER ============
 function renderChapter(id) {
   const ch = CHAPTERS.find(c => c.id === id);
   if (!ch) { location.hash = "#home"; return; }
@@ -317,11 +280,9 @@ function renderChapter(id) {
     <div class="tabs">
       <button class="tab active" data-tab="notes">Notes</button>
       <button class="tab" data-tab="quiz">Quiz</button>
-      <button class="tab" data-tab="ask">Ask Stack AI</button>
     </div>
     <div id="chapterBody"></div>
   `;
-
   $$(".tab").forEach(t => t.addEventListener("click", () => {
     currentTab = t.dataset.tab;
     $$(".tab").forEach(x => x.classList.toggle("active", x === t));
@@ -334,25 +295,14 @@ function renderTab() {
   const ch = currentChapter;
   if (!ch) return;
   const body = $("#chapterBody");
-  if (currentTab === "notes") {
-    body.innerHTML = `<div class="content">${mdToHtml(ch.notes)}</div>`;
-  } else if (currentTab === "quiz") {
-    renderQuiz(ch);
-  } else if (currentTab === "ask") {
-    renderAsk(ch);
-  }
+  if (currentTab === "notes") body.innerHTML = `<div class="content">${mdToHtml(ch.notes)}</div>`;
+  else if (currentTab === "quiz") renderQuiz(ch);
 }
 
-// ---------- QUIZ LOGIC ----------
+// ============ QUIZ ============
 function renderQuiz(ch) {
   if (!quizState) {
-    quizState = {
-      index: 0,
-      answers: new Array(ch.quiz.length).fill(undefined),
-      questions: shuffle(ch.quiz),
-      done: false,
-      reviewing: false
-    };
+    quizState = { index: 0, answers: new Array(ch.quiz.length).fill(undefined), questions: shuffle(ch.quiz), done: false, reviewing: false };
   }
   const body = $("#chapterBody");
   const total = quizState.questions.length;
@@ -364,486 +314,615 @@ function renderQuiz(ch) {
       const isCorrect = userAns === q.answer;
       reviewHtml += `<div class="review-item">
         <div class="q-text">${i+1}. ${escapeHtml(q.q)}</div>
-        <div class="a-row ${isCorrect ? 'correct' : 'wrong'}">
-          Your answer: ${String.fromCharCode(65 + userAns)}. ${escapeHtml(q.options[userAns])}
-          ${isCorrect ? '✓' : '✗'}
-        </div>
-        ${!isCorrect ? `<div class="a-row correct">
-          Correct answer: ${String.fromCharCode(65 + q.answer)}. ${escapeHtml(q.options[q.answer])}
-        </div>` : ''}
-        <div class="quiz-explain" style="margin-top:12px">
-          <strong>Why:</strong> ${escapeHtml(q.explain)}
-        </div>
+        <div class="a-row ${isCorrect ? 'correct' : 'wrong'}">Your answer: ${String.fromCharCode(65 + userAns)}. ${escapeHtml(q.options[userAns])} ${isCorrect ? '✓' : '✗'}</div>
+        ${!isCorrect ? `<div class="a-row correct">Correct: ${String.fromCharCode(65 + q.answer)}. ${escapeHtml(q.options[q.answer])}</div>` : ''}
+        <div class="quiz-explain"><strong>Why:</strong> ${escapeHtml(q.explain)}</div>
       </div>`;
     });
-    body.innerHTML = reviewHtml + `
-      <div class="quiz-actions" style="justify-content:center; margin-top:32px">
-        <button class="btn btn-primary" id="retryBtn">Retake Quiz</button>
-        <button class="btn" id="backToScoreBtn">Back to Score</button>
-      </div>
-    `;
+    body.innerHTML = reviewHtml + `<div class="quiz-actions" style="justify-content:center;margin-top:32px"><button class="btn btn-primary" id="retryBtn">Retake Quiz</button><button class="btn" id="backToScoreBtn">Back to Score</button></div>`;
     $("#retryBtn").addEventListener("click", () => { quizState = null; renderQuiz(ch); });
     $("#backToScoreBtn").addEventListener("click", () => { quizState.reviewing = false; renderQuiz(ch); });
     return;
   }
-
   if (quizState.done) {
     const score = quizState.answers.filter((a, i) => a === quizState.questions[i].answer).length;
     const pct = Math.round((score / total) * 100);
     const msg = pct >= 80 ? "Excellent work!" : pct >= 50 ? "Good — review the wrong answers." : "Re-read the notes and try again.";
-    body.innerHTML = `
-      <div class="score-card">
-        <div class="score-big">${score}/${total}</div>
-        <div class="score-label">${pct}% correct</div>
-        <div class="score-msg">${msg}</div>
-        <div class="quiz-actions" style="justify-content:center; margin-top:32px">
-          <button class="btn btn-primary" id="reviewBtn">Review Answers</button>
-          <button class="btn" id="retryBtn">Retake Quiz</button>
-        </div>
-      </div>
-    `;
+    body.innerHTML = `<div class="score-card"><div class="score-big">${score}/${total}</div><div class="score-label">${pct}% correct</div><div class="score-msg">${msg}</div><div class="quiz-actions" style="justify-content:center;margin-top:32px"><button class="btn btn-primary" id="reviewBtn">Review Answers</button><button class="btn" id="retryBtn">Retake Quiz</button></div></div>`;
     $("#reviewBtn").addEventListener("click", () => { quizState.reviewing = true; renderQuiz(ch); });
     $("#retryBtn").addEventListener("click", () => { quizState = null; renderQuiz(ch); });
     return;
   }
-
   const q = quizState.questions[quizState.index];
   const selected = quizState.answers[quizState.index];
   const pct = Math.round((quizState.index / total) * 100);
-
-  const optionsHtml = q.options.map((opt, i) => {
-    const isSelected = selected === i;
-    return `<button class="quiz-option ${isSelected ? 'selected' : ''}" data-idx="${i}">
-      <span class="letter">${String.fromCharCode(65 + i)}</span>
-      <span>${escapeHtml(opt)}</span>
-    </button>`;
-  }).join("");
-
+  const optionsHtml = q.options.map((opt, i) => `<button class="quiz-option ${selected === i ? 'selected' : ''}" data-idx="${i}"><span class="letter">${String.fromCharCode(65 + i)}</span><span>${escapeHtml(opt)}</span></button>`).join("");
   body.innerHTML = `
-    <div class="quiz-progress-wrap">
-      <div class="quiz-progress"><div class="quiz-progress-fill" style="width:${pct}%"></div></div>
-    </div>
-    <div class="quiz-question">
-      <div class="q-num">Question ${quizState.index + 1} of ${total}</div>
-      <div class="q-text">${escapeHtml(q.q)}</div>
-      <div class="quiz-options">${optionsHtml}</div>
-    </div>
-    <div class="quiz-actions">
-      <button class="btn btn-primary" id="nextBtn" ${selected === undefined ? 'disabled' : ''}>
-        ${quizState.index === total - 1 ? "Finish Quiz" : "Next Question"}
-      </button>
-    </div>
+    <div class="quiz-progress-wrap"><div class="quiz-progress"><div class="quiz-progress-fill" style="width:${pct}%"></div></div></div>
+    <div class="quiz-question"><div class="q-num">Question ${quizState.index + 1} of ${total}</div><div class="q-text">${escapeHtml(q.q)}</div><div class="quiz-options">${optionsHtml}</div></div>
+    <div class="quiz-actions"><button class="btn btn-primary" id="nextBtn" ${selected === undefined ? 'disabled' : ''}>${quizState.index === total - 1 ? "Finish Quiz" : "Next Question"}</button></div>
   `;
-
-  $$(".quiz-option").forEach(btn => btn.addEventListener("click", () => {
-    quizState.answers[quizState.index] = Number(btn.dataset.idx);
-    renderQuiz(ch);
-  }));
+  $$(".quiz-option").forEach(btn => btn.addEventListener("click", () => { quizState.answers[quizState.index] = Number(btn.dataset.idx); renderQuiz(ch); }));
   $("#nextBtn").addEventListener("click", () => {
     if (quizState.index === total - 1) {
       quizState.done = true;
       const score = quizState.answers.filter((a, i) => a === quizState.questions[i].answer).length;
-      setChapterScore(ch.id, score, total);
-    } else {
-      quizState.index++;
-    }
+      const p = getProgress();
+      const prev = p[ch.id] || { best: 0, attempts: 0 };
+      p[ch.id] = { best: Math.max(prev.best, score), total, attempts: prev.attempts + 1 };
+      saveProgress(p);
+      renderSidebar();
+    } else quizState.index++;
     renderQuiz(ch);
   });
 }
 
-// ============================================================
-//  AI TUTOR
-// ============================================================
-const STOPWORDS = new Set([
-  "the","a","an","is","are","was","were","of","to","in","on","for","and","or","what","how","why","when",
-  "which","who","does","do","can","i","my","with","that","this","it","be","by","from","as","at","if","so",
-  "am","me","we","us","our","you","your","they","them","their","he","she","his","her","its","but","not",
-  "no","nor","than","then","too","very","just","only","also","such","some","any","all","each","every",
-  "both","few","more","most","other","into","over","under","about","after","before","between","during",
-  "through","up","down","out","off","again","further","once","here","there","where","will","would","should",
-  "could","may","might","must","shall","have","has","had","being","been","get","got","make","made"
-]);
+// ============ EXAM CENTRE ============
+function renderExamCentre() {
+  currentChapter = null;
+  $$(".nav-item").forEach(n => n.classList.remove("active"));
+  $('[data-nav="exams"]')?.classList.add("active");
 
-const SYNONYMS = {
-  calculate: ["compute","formula","calculation","work","derive","find","equation","math"],
-  formula: ["calculate","equation","calculation","compute"],
-  difference: ["compare","versus","vs","distinguish","contrast","differ"],
-  compare: ["difference","versus","vs","contrast"],
-  versus: ["difference","compare","vs"],
-  vs: ["difference","compare","versus"],
-  define: ["definition","meaning","explain","describe"],
-  definition: ["define","meaning","explain"],
-  meaning: ["define","definition"],
-  explain: ["define","describe","meaning"],
-  exam: ["test","assessment","paper","examination"],
-  test: ["exam","assessment","paper"],
-  paper: ["exam","test","assessment"],
-  assessment: ["exam","test","paper"],
-  profit: ["margin","earnings","income","gain"],
-  loss: ["deficit","negative"],
-  cost: ["expense","expenditure","price"],
-  price: ["cost","pricing"],
-  revenue: ["sales","income","turnover"],
-  sales: ["revenue","turnover"],
-  vat: ["tax","taxation","value-added"],
-  tax: ["vat","taxation"],
-  inventory: ["stock","inventory","goods"],
-  stock: ["inventory","goods"],
-  employee: ["worker","staff","personnel","labour","labor"],
-  worker: ["employee","staff"],
-  staff: ["employee","workers"],
-  manager: ["management","supervisor","leader"],
-  management: ["manager","managing","supervise"],
-  leader: ["leadership","manager"],
-  leadership: ["leader","managing"],
-  motivation: ["motivate","incentive","drive"],
-  motivate: ["motivation","incentive"],
-  communication: ["communicate","message","communicating"],
-  communicate: ["communication","message"],
-  conflict: ["dispute","disagreement","clash"],
-  team: ["group","teamwork"],
-  group: ["team","teamwork"],
-  customer: ["client","consumer","buyer"],
-  consumer: ["customer","client","buyer"],
-  buy: ["purchase","buying"],
-  purchase: ["buy","buying"],
-  sell: ["sale","selling"],
-  sale: ["sell","selling"],
-  promotion: ["advertising","marketing"],
-  marketing: ["market","promotion"],
-  segmentation: ["segment","segments","target"],
-  target: ["targeting","targets"],
-  break: ["breakeven","break-even","bep"],
-  breakeven: ["break-even","bep"],
-  "break-even": ["breakeven","bep"]
-};
+  const examsData = getExamsData();
+  const modules = [...new Set(EXAM_PAPERS.map(p => p.module))];
 
-const SUFFIX_RULES = [
-  [/ies$/, "y"], [/sses$/, "ss"], [/edly$/, ""], [/ing$/, ""], [/ed$/, ""], [/ment$/, ""],
-  [/ness$/, ""], [/tion$/, "t"], [/sion$/, "s"], [/ly$/, ""], [/est$/, ""], [/es$/, ""], [/s$/, ""]
-];
+  let html = `
+    <div class="dashboard-header">
+      <h1>Exam Centre</h1>
+      <p>Each module has <strong>two complete 100-mark exams</strong>. Sit them one at a time, auto-marked.</p>
+    </div>
+  `;
 
-function stem(word) {
-  if (word.length < 4) return word;
-  for (const [re, rep] of SUFFIX_RULES) {
-    if (re.test(word)) { const s = word.replace(re, rep); if (s.length >= 3) return s; }
-  }
-  return word;
-}
+  modules.forEach(mod => {
+    const papers = getExamsByModule(mod);
+    html += `<div class="exam-module-section">
+      <div class="exam-module-title">${escapeHtml(mod)}</div>
+      <div class="exam-grid">
+        ${papers.map(paper => renderExamCard(paper, examsData[paper.id])).join("")}
+      </div>
+    </div>`;
+  });
 
-function tokenize(text) {
-  return String(text).toLowerCase().replace(/[^a-z0-9\s&'-]/g, " ").split(/\s+/)
-    .filter(w => w && w.length > 1 && !STOPWORDS.has(w));
-}
-
-function expandTerms(terms) {
-  const out = new Set();
-  for (const t of terms) {
-    out.add(t); out.add(stem(t));
-    const syn = SYNONYMS[t] || SYNONYMS[stem(t)];
-    if (syn) {
-      for (const s of syn) {
-        out.add(s);
-        for (const w of tokenize(s)) { out.add(w); out.add(stem(w)); }
+  $("#main").innerHTML = html;
+  $$(".exam-card .exam-action-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const paperId = btn.dataset.paper;
+      const st = examsData[paperId];
+      if (!st || st.status === "not_started") {
+        location.hash = `#exam-instructions/${paperId}`;
+      } else {
+        location.hash = `#exam/${paperId}`;
       }
-    }
-  }
-  return out;
-}
-
-let TUTOR_INDEX = null;
-
-function buildIndex() {
-  if (TUTOR_INDEX) return TUTOR_INDEX;
-  const sections = [];
-  const docFreq = {};
-  for (const ch of CHAPTERS) {
-    const parts = ch.notes.split(/^##\s+/m);
-    parts.forEach((part, i) => {
-      if (!part.trim()) return;
-      const lines = part.split("\n");
-      const heading = (i === 0 ? "Overview" : lines[0]).trim();
-      const body = (i === 0 ? part : lines.slice(1).join("\n")).trim();
-      const text = heading + "\n" + body;
-      const tokens = tokenize(text);
-      const stems = new Set(tokens.map(stem));
-      for (const s of stems) docFreq[s] = (docFreq[s] || 0) + 1;
-      sections.push({
-        chapterId: ch.id, chapterNumber: ch.number, chapterTitle: ch.title,
-        module: ch.module, heading, body, text, tokens, stems,
-        lower: text.toLowerCase(), isFaq: false
-      });
     });
-    (ch.faq || []).forEach(f => {
-      const text = f.q + " " + f.a;
-      const tokens = tokenize(text);
-      const stems = new Set(tokens.map(stem));
-      for (const s of stems) docFreq[s] = (docFreq[s] || 0) + 1;
-      sections.push({
-        chapterId: ch.id, chapterNumber: ch.number, chapterTitle: ch.title,
-        module: ch.module, heading: "Q: " + f.q, body: f.a, text, tokens, stems,
-        lower: text.toLowerCase(), isFaq: true
-      });
-    });
-  }
-  TUTOR_INDEX = { sections, docFreq, N: sections.length };
-  return TUTOR_INDEX;
-}
-
-function scoreSection(section, queryStems, queryTerms, preferredChapterId) {
-  let score = 0;
-  for (const qs of queryStems) {
-    if (section.stems.has(qs)) {
-      const df = TUTOR_INDEX.docFreq[qs] || 1;
-      score += Math.log(1 + TUTOR_INDEX.N / df);
-    }
-  }
-  for (const qt of queryTerms) if (section.lower.includes(qt)) score += 0.3;
-  const headingLower = section.heading.toLowerCase();
-  for (const qt of queryTerms) if (headingLower.includes(qt)) score += 1.0;
-  const chTitleLower = section.chapterTitle.toLowerCase();
-  for (const qt of queryTerms) if (chTitleLower.includes(qt)) score += 0.5;
-  if (section.isFaq) score *= 1.3;
-  if (preferredChapterId && section.chapterId === preferredChapterId) score *= 1.4;
-  return score;
-}
-
-function extractRelevantSentences(body, queryTerms, maxSentences = 4) {
-  const lines = body.split(/\n+/).map(l => l.trim()).filter(Boolean);
-  const scored = lines.map((line, i) => {
-    const lower = line.toLowerCase();
-    let hits = 0;
-    for (const t of queryTerms) if (lower.includes(t)) hits++;
-    return { line: line.length > 400 ? line.slice(0, 400) + "…" : line, hits, index: i };
   });
-  const top = scored.filter(s => s.hits > 0).sort((a, b) => b.hits - a.hits).slice(0, maxSentences);
-  top.sort((a, b) => a.index - b.index);
-  if (!top.length) return body.slice(0, 600);
-  return top.map(s => s.line).join("\n\n");
 }
 
-function defaultSuggestions(preferredChapterId) {
-  if (preferredChapterId) {
-    const ch = CHAPTERS.find(c => c.id === preferredChapterId);
-    if (ch && ch.faq && ch.faq.length) return ch.faq.slice(0, 4).map(f => f.q);
-  }
-  return QUICK_START_QUESTIONS.slice(0, 4);
+function renderExamCard(paper, state) {
+  const st = state?.status || "not_started";
+  const score = state?.bestScore ?? state?.score ?? null;
+  let statusBadge, actionLabel;
+  if (st === "not_started") { statusBadge = `<span class="status-pill status-not-started">Not started</span>`; actionLabel = "Start exam"; }
+  else if (st === "in_progress") { statusBadge = `<span class="status-pill status-progress">In progress</span>`; actionLabel = "Continue"; }
+  else { statusBadge = `<span class="status-pill status-done">${Math.round(score)}/100</span>`; actionLabel = "Review / Retake"; }
+
+  return `<div class="exam-card">
+    <div class="exam-card-head">
+      <div class="exam-card-name">${escapeHtml(paper.name)}</div>
+      ${statusBadge}
+    </div>
+    <div class="exam-card-meta">${paper.questions.length} questions · ${paper.duration} min · 100 marks</div>
+    <div class="exam-card-actions">
+      <button class="btn btn-primary exam-action-btn" data-paper="${paper.id}">${actionLabel}</button>
+    </div>
+  </div>`;
 }
 
-function aiAnswer(question, preferredChapterId) {
-  const rawTokens = tokenize(question);
-  if (!rawTokens.length) {
-    return {
-      text: "Please type a question about the course content — for example, *\"How do I calculate break-even?\"*",
-      suggestions: defaultSuggestions(preferredChapterId)
-    };
-  }
-  buildIndex();
-  const queryTerms = rawTokens;
-  const queryStems = expandTerms(rawTokens);
-  const scored = TUTOR_INDEX.sections
-    .map(s => ({ section: s, score: scoreSection(s, queryStems, queryTerms, preferredChapterId) }))
-    .filter(x => x.score > 0)
-    .sort((a, b) => b.score - a.score);
+// ============ EXAM INSTRUCTIONS ============
+function renderExamInstructions(paperId) {
+  const paper = findExamPaper(paperId);
+  if (!paper) { location.hash = "#exams"; return; }
 
-  if (!scored.length || scored[0].score < 0.8) {
-    return {
-      text: "Hmm — I couldn't find a strong match for that in the course notes. Try rephrasing, or pick one of the suggestions below. You can also browse the **Notes** tab directly.",
-      suggestions: defaultSuggestions(preferredChapterId)
-    };
-  }
+  currentChapter = null;
+  $$(".nav-item").forEach(n => n.classList.remove("active"));
+  $('[data-nav="exams"]')?.classList.add("active");
 
-  const top = scored.slice(0, 3);
-  const best = top[0].section;
-  const bestChapter = CHAPTERS.find(c => c.id === best.chapterId);
-  let answerBody;
-  if (best.isFaq) answerBody = best.body;
-  else answerBody = extractRelevantSentences(best.body, queryTerms, 4);
-  const heading = best.isFaq ? best.heading.replace(/^Q:\s*/, "") : best.heading;
-  const text = `**${heading}**\n\n${answerBody}`;
-
-  const related = top.slice(1).map(x => x.section).filter(s => s.heading !== best.heading);
-  const suggestions = [];
-  related.forEach(s => {
-    if (s.isFaq) suggestions.push(s.heading.replace(/^Q:\s*/, ""));
-    else suggestions.push(`${s.chapterTitle}: ${s.heading}`);
+  // Build section summary
+  const sections = {};
+  paper.questions.forEach(q => {
+    if (!sections[q.section]) sections[q.section] = { title: q.sectionTitle, count: 0, marks: 0 };
+    sections[q.section].count++;
+    sections[q.section].marks += q.marks || 0;
   });
-  if (!suggestions.length) (bestChapter.faq || []).slice(0, 3).forEach(f => suggestions.push(f.q));
 
-  return {
-    text,
-    suggestions: [...new Set(suggestions)].slice(0, 4),
-    source: `${best.chapterNumber}. ${best.chapterTitle} · ${best.module}`
-  };
-}
+  const existing = getExamState(paperId);
+  const resumeNote = existing && existing.status === "in_progress" ? `<div class="notice">You have an in-progress attempt. Starting fresh will replace your saved answers.</div>` : "";
 
-async function remoteAnswer(question, chapterScope) {
-  buildIndex();
-  const queryTerms = tokenize(question);
-  const queryStems = expandTerms(queryTerms);
-  const top = TUTOR_INDEX.sections
-    .map(s => ({ s, score: scoreSection(s, queryStems, queryTerms, chapterScope?.id) }))
-    .filter(x => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
-  const context = top.map(x => `[${x.s.chapterTitle} — ${x.s.heading}]\n${x.s.body}`).join("\n\n---\n\n");
-  const res = await fetch(TUTOR_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, context, chapterId: chapterScope?.id || null })
-  });
-  if (!res.ok) throw new Error("Remote tutor failed");
-  const data = await res.json();
-  return { text: data.answer || "", suggestions: data.suggestions || [], source: data.source };
-}
+  $("#main").innerHTML = `
+    <div class="exam-instructions">
+      <div class="exam-back"><a href="#exams">← Exam Centre</a></div>
+      <h1>${escapeHtml(paper.module)}</h1>
+      <h2 class="exam-instructions-name">${escapeHtml(paper.name)}</h2>
+      <div class="exam-instructions-stats">
+        <div><span class="label">Duration</span><span class="value">${paper.duration} minutes (optional)</span></div>
+        <div><span class="label">Total marks</span><span class="value">100</span></div>
+        <div><span class="label">Questions</span><span class="value">${paper.questions.length}</span></div>
+      </div>
 
-// ---------- CHAT UI ----------
-function renderChatInto(container, chapterScope) {
-  chatHistory = [];
-  const placeholder = chapterScope ? `Ask about ${chapterScope.title}…` : "Ask anything about your course notes…";
-  container.innerHTML = `
-    <div class="chat-container">
-      <div class="chat-thread" id="chatThread"></div>
-      <div class="chat-input-wrap">
-        <textarea id="askInput" placeholder="${escapeHtml(placeholder)}"></textarea>
-        <button class="btn btn-primary" id="askBtn">Ask</button>
+      <div class="section-summary">
+        <h3>Sections</h3>
+        ${Object.entries(sections).map(([key, s]) => `
+          <div class="section-summary-row">
+            <span><strong>Section ${key}</strong> — ${escapeHtml(s.title)}</span>
+            <span>${s.count} question${s.count !== 1 ? 's' : ''} · ${s.marks} marks</span>
+          </div>
+        `).join("")}
+      </div>
+
+      <div class="exam-rules">
+        <h3>Instructions</h3>
+        <ul>
+          <li>Questions are shown <strong>one at a time</strong>. You can go back and change answers.</li>
+          <li>You can <strong>skip</strong> a question and return to it later.</li>
+          <li>Your answers <strong>auto-save</strong> — safe to close the app and continue later.</li>
+          <li>Model answers are shown <strong>after you submit</strong> (first attempt only).</li>
+          <li>Your mark is saved to the Mark Tracker automatically.</li>
+          ${existing && existing.attempts > 0 ? `<li>You have already attempted this paper ${existing.attempts} time(s). Model answers will not be shown on retakes.</li>` : ""}
+        </ul>
+      </div>
+      ${resumeNote}
+      <div class="exam-start-buttons">
+        <button class="btn btn-primary btn-lg" id="startTimed">Start with timer (${paper.duration} min)</button>
+        <button class="btn btn-lg" id="startUntimed">Start without timer</button>
       </div>
     </div>
   `;
-  $("#askBtn").addEventListener("click", () => handleAsk(chapterScope));
-  $("#askInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAsk(chapterScope); }
-  });
-  $("#askInput").focus();
-  renderChatThread(chapterScope);
+
+  $("#startTimed").addEventListener("click", () => startExam(paperId, true));
+  $("#startUntimed").addEventListener("click", () => startExam(paperId, false));
 }
 
-function renderAsk(ch) { renderChatInto($("#chapterBody"), ch); }
+function startExam(paperId, timed) {
+  const paper = findExamPaper(paperId);
+  if (!paper) return;
+  const existing = getExamState(paperId);
+  const attempts = existing?.attempts || 0;
+  const state = {
+    paperId,
+    status: "in_progress",
+    answers: existing?.answers || {},
+    currentIndex: 0,
+    timed,
+    timeLeft: timed ? paper.duration * 60 : null,
+    startedAt: Date.now(),
+    attempts,
+    showingModel: attempts === 0
+  };
+  saveExamState(paperId, state);
+  location.hash = `#exam/${paperId}`;
+}
 
-function renderAskGlobal() {
+// ============ EXAM TAKING ============
+function renderExam(paperId) {
+  const paper = findExamPaper(paperId);
+  const state = getExamState(paperId);
+  if (!paper || !state) { location.hash = "#exams"; return; }
+
+  if (state.status === "submitted") { renderExamResults(paperId); return; }
+
   currentChapter = null;
-  activeModuleId = null;
+  currentExam = paper;
+  currentExamQuestionIndex = state.currentIndex || 0;
+
   $$(".nav-item").forEach(n => n.classList.remove("active"));
-  $('[data-nav="ask"]').classList.add("active");
+  $('[data-nav="exams"]')?.classList.add("active");
+
+  renderExamView(paperId);
+  if (state.timed && state.timeLeft > 0) startExamTimer(paperId);
+}
+
+function startExamTimer(paperId) {
+  if (examTimerHandle) clearInterval(examTimerHandle);
+  examTimerHandle = setInterval(() => {
+    const state = getExamState(paperId);
+    if (!state || state.status !== "in_progress") { clearInterval(examTimerHandle); return; }
+    state.timeLeft = Math.max(0, (state.timeLeft || 0) - 1);
+    saveExamState(paperId, state);
+    const el = $("#examTimerText");
+    if (el) el.textContent = formatTime(state.timeLeft);
+    if (state.timeLeft <= 0) {
+      clearInterval(examTimerHandle);
+      showToast("Time is up — submitting exam.");
+      submitExam(paperId);
+    }
+  }, 1000);
+}
+
+function pauseExamTimer() {
+  if (examTimerHandle) { clearInterval(examTimerHandle); examTimerHandle = null; }
+}
+
+function renderExamView(paperId) {
+  const paper = findExamPaper(paperId);
+  const state = getExamState(paperId);
+  if (!paper || !state) return;
+  const q = paper.questions[state.currentIndex];
+  const total = paper.questions.length;
+
+  const dotNav = paper.questions.map((qq, i) => {
+    const ans = state.answers[i];
+    const answered = ans != null && !isEmptyAnswer(ans);
+    const cls = i === state.currentIndex ? "dot active" : answered ? "dot answered" : "dot";
+    return `<button class="${cls}" data-jump="${i}" title="Question ${i+1}"></button>`;
+  }).join("");
+
+  const questionBody = renderQuestionBody(q, state.answers[state.currentIndex], paperId);
+
   $("#main").innerHTML = `
-    <div class="dashboard-header">
-      <h1>🤖 Ask Stack AI</h1>
-      <p>An AI Tutor grounded in your course notes. Ask any question across all 5 modules.</p>
+    <div class="exam-top-bar">
+      <a href="#exams" class="exam-exit" id="exitExam">✕ Exit</a>
+      <div class="exam-title">${escapeHtml(paper.module)} · ${escapeHtml(paper.name)}</div>
+      <div class="exam-timer" ${state.timed ? "" : "hidden"}>
+        <span class="timer-icon">⏱</span><span id="examTimerText">${formatTime(state.timeLeft)}</span>
+      </div>
     </div>
-    <div id="chatMount"></div>
+    <div class="exam-dot-nav">${dotNav}</div>
+    <div class="exam-progress-bar"><div class="exam-progress-fill" style="width:${((state.currentIndex+1)/total)*100}%"></div></div>
+    <div class="exam-question-card">
+      <div class="exam-q-head">
+        <span class="exam-q-section">Section ${q.section} · ${escapeHtml(q.sectionTitle)}</span>
+        <span class="exam-q-marks">${q.marks} marks</span>
+      </div>
+      <div class="exam-q-prompt">${escapeHtml(q.prompt).replace(/\n/g, '<br>')}</div>
+      <div class="exam-q-body">${questionBody}</div>
+    </div>
+    <div class="exam-nav">
+      <button class="btn" id="prevQ" ${state.currentIndex === 0 ? "disabled" : ""}>← Previous</button>
+      <button class="btn" id="skipQ">Skip</button>
+      ${state.currentIndex === total - 1
+        ? `<button class="btn btn-primary" id="submitQ">Finish & Submit</button>`
+        : `<button class="btn btn-primary" id="nextQ">Next →</button>`}
+    </div>
   `;
-  renderChatInto($("#chatMount"), null);
+
+  // Wire handlers
+  $("#prevQ")?.addEventListener("click", () => { state.currentIndex = Math.max(0, state.currentIndex - 1); saveExamState(paperId, state); renderExamView(paperId); });
+  $("#nextQ")?.addEventListener("click", () => { state.currentIndex = Math.min(total - 1, state.currentIndex + 1); saveExamState(paperId, state); renderExamView(paperId); });
+  $("#skipQ")?.addEventListener("click", () => { state.currentIndex = Math.min(total - 1, state.currentIndex + 1); saveExamState(paperId, state); renderExamView(paperId); });
+  $("#submitQ")?.addEventListener("click", () => confirmAndSubmit(paperId));
+  $("#exitExam")?.addEventListener("click", (e) => { e.preventDefault(); if (confirm("Exit exam? Your answers are saved.")) { pauseExamTimer(); location.hash = "#exams"; } });
+  $$(".dot").forEach(b => b.addEventListener("click", () => { state.currentIndex = Number(b.dataset.jump); saveExamState(paperId, state); renderExamView(paperId); }));
+
+  wireQuestionInputs(paperId, q, state);
 }
 
-function emptyChatHtml(chapterScope) {
-  const suggestions = chapterScope
-    ? (chapterScope.faq || []).slice(0, 4).map(f => f.q)
-    : QUICK_START_QUESTIONS;
-  const scopeText = chapterScope
-    ? `about <strong>${escapeHtml(chapterScope.title)}</strong>`
-    : `about your course`;
-  return `<div class="chat-empty">
-    <div class="chat-empty-icon">🤖</div>
-    <h3>Hi, I'm Stack AI</h3>
-    <p>I'm grounded in your course notes. Ask me anything ${scopeText}.</p>
-    <div class="chat-suggestions">
-      ${suggestions.map(s => `<button class="chat-chip" data-q="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join("")}
-    </div>
-  </div>`;
-}
-
-function renderChatMessage(msg) {
-  if (msg.role === "user") {
-    return `<div class="chat-msg user"><div class="chat-bubble">${escapeHtml(msg.text)}</div></div>`;
+function renderQuestionBody(q, answer, paperId) {
+  if (q.type === "mcq") {
+    return q.options.map((opt, i) => `
+      <button class="exam-mcq-option ${answer === i ? "selected" : ""}" data-mcq="${i}">
+        <span class="mcq-letter">${String.fromCharCode(65 + i)}</span>
+        <span>${escapeHtml(opt)}</span>
+      </button>
+    `).join("");
   }
-  if (msg.pending) {
-    return `<div class="chat-msg assistant"><div class="chat-bubble chat-typing">
-      <span></span><span></span><span></span>
-    </div></div>`;
+  if (q.type === "short" || q.type === "essay") {
+    const val = typeof answer === "string" ? answer : "";
+    const rows = q.type === "essay" ? 14 : 6;
+    return `<textarea class="exam-textarea" rows="${rows}" placeholder="Type your answer here…">${escapeHtml(val)}</textarea>
+      <div class="exam-wordcount"><span id="wordCount">${val ? val.trim().split(/\s+/).length : 0}</span> words</div>`;
   }
-  return `<div class="chat-msg assistant">
-    <div class="chat-bubble">
-      ${mdToHtml(msg.text)}
-      ${msg.source ? `<div class="chat-source">Source: ${escapeHtml(msg.source)}</div>` : ""}
-      ${msg.suggestions && msg.suggestions.length ? `
-        <div class="chat-suggestions chat-suggestions-inline">
-          ${msg.suggestions.map(s => `<button class="chat-chip" data-q="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join("")}
-        </div>` : ""}
-    </div>
-  </div>`;
+  if (q.type === "table") {
+    const ans = typeof answer === "object" && answer ? answer : {};
+    return `<div class="exam-table-desc">${escapeHtml(q.description || "")}</div>
+      <div class="exam-table-wrap">
+        <table class="exam-table">
+          <thead><tr>${q.columns.map(c => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>
+          <tbody>
+            ${q.rows.map((row, ri) => `<tr>
+              ${row.cells.map((cell, ci) => {
+                const key = `${ri}_${ci}`;
+                if (cell.locked) return `<td class="locked">${cell.value}</td>`;
+                if (cell.options) {
+                  const val = ans[key] || "";
+                  return `<td><select data-table="${key}"><option value="">—</option>${cell.options.map(o => `<option value="${o}" ${val === o ? "selected" : ""}>${o}</option>`).join("")}</select></td>`;
+                }
+                return `<td><input type="number" step="any" data-table="${key}" value="${ans[key] || ""}" placeholder="?"></td>`;
+              }).join("")}
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+  return "";
 }
 
-function renderChatThread(chapterScope) {
-  const thread = $("#chatThread");
-  if (!thread) return;
-  if (!chatHistory.length) thread.innerHTML = emptyChatHtml(chapterScope);
-  else {
-    thread.innerHTML = chatHistory.map(renderChatMessage).join("");
-    thread.scrollTop = thread.scrollHeight;
-  }
-  bindChatChips(chapterScope);
-}
-
-function bindChatChips(chapterScope) {
-  $$(".chat-chip").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const q = btn.dataset.q;
-      const input = $("#askInput");
-      if (input) input.value = q;
-      handleAsk(chapterScope);
+function wireQuestionInputs(paperId, q, state) {
+  if (q.type === "mcq") {
+    $$(".exam-mcq-option").forEach(btn => btn.addEventListener("click", () => {
+      state.answers[state.currentIndex] = Number(btn.dataset.mcq);
+      saveExamState(paperId, state);
+      renderExamView(paperId);
+    }));
+  } else if (q.type === "short" || q.type === "essay") {
+    const ta = $(".exam-textarea");
+    if (ta) {
+      ta.addEventListener("input", () => {
+        state.answers[state.currentIndex] = ta.value;
+        saveExamState(paperId, state);
+        const wc = $("#wordCount");
+        if (wc) wc.textContent = ta.value.trim() ? ta.value.trim().split(/\s+/).length : 0;
+      });
+    }
+  } else if (q.type === "table") {
+    $$("[data-table]").forEach(input => {
+      input.addEventListener("change", () => {
+        const key = input.dataset.table;
+        if (!state.answers[state.currentIndex]) state.answers[state.currentIndex] = {};
+        state.answers[state.currentIndex][key] = input.value;
+        saveExamState(paperId, state);
+      });
     });
+  }
+}
+
+function confirmAndSubmit(paperId) {
+  const paper = findExamPaper(paperId);
+  const state = getExamState(paperId);
+  const unanswered = paper.questions.filter((q, i) => isEmptyAnswer(state.answers[i])).length;
+  const msg = unanswered > 0
+    ? `You have ${unanswered} unanswered question${unanswered !== 1 ? "s" : ""}. Submit anyway?`
+    : "Submit your exam?";
+  if (confirm(msg)) submitExam(paperId);
+}
+
+// ============ SUBMIT & GRADE ============
+function submitExam(paperId) {
+  pauseExamTimer();
+  const paper = findExamPaper(paperId);
+  const state = getExamState(paperId);
+  if (!paper || !state) return;
+
+  const graded = gradeExam(paper, state.answers);
+  state.status = "submitted";
+  state.score = graded.total;
+  state.bestScore = Math.max(state.bestScore || 0, graded.total);
+  state.submittedAt = Date.now();
+  state.graded = graded;
+  state.attempts = (state.attempts || 0) + 1;
+  state.showingModel = state.attempts === 1;
+  saveExamState(paperId, state);
+
+  syncExamToTracker(paperId, graded.total);
+  location.hash = `#exam/${paperId}`;
+}
+
+function gradeExam(paper, answers) {
+  let total = 0;
+  const perQuestion = paper.questions.map((q, i) => {
+    const ans = answers[i];
+    const result = gradeQuestion(q, ans);
+    total += result.score;
+    return { question: q, answer: ans, result };
+  });
+  return { total: Math.round(total * 2) / 2, perQuestion };
+}
+
+function gradeQuestion(q, answer) {
+  if (q.type === "mcq") {
+    const correct = answer === q.answer;
+    return { score: correct ? q.marks : 0, maxMarks: q.marks, criteria: [{ label: "Correct option", hit: correct, marks: q.marks, awarded: correct ? q.marks : 0 }] };
+  }
+  if (q.type === "short" || q.type === "essay") {
+    const text = typeof answer === "string" ? answer : "";
+    let score = 0;
+    const criteria = (q.rubric || []).map(c => {
+      const groupsHit = c.groups.filter(group => group.some(concept => textContainsConcept(text, concept))).length;
+      const ratio = c.groups.length ? groupsHit / c.groups.length : 0;
+      const awarded = Math.round(c.marks * ratio * 2) / 2;
+      score += awarded;
+      return { label: c.label, hit: groupsHit > 0, groupsHit, totalGroups: c.groups.length, marks: c.marks, awarded };
+    });
+    return { score: Math.round(score * 2) / 2, maxMarks: q.marks, criteria };
+  }
+  if (q.type === "table") {
+    const ans = typeof answer === "object" && answer ? answer : {};
+    let score = 0;
+    const criteria = [];
+    q.rows.forEach((row, ri) => {
+      row.cells.forEach((cell, ci) => {
+        if (cell.locked) return;
+        const key = `${ri}_${ci}`;
+        const studentVal = ans[key];
+        const correct = checkTableCell(cell, studentVal);
+        const awarded = correct ? (cell.marks || 0) : 0;
+        score += awarded;
+        criteria.push({ label: `R${ri+1} C${ci+1}`, expected: cell.expected ?? cell.options?.[0], studentVal, hit: correct, marks: cell.marks || 0, awarded });
+      });
+    });
+    return { score: Math.round(score * 2) / 2, maxMarks: q.marks, criteria };
+  }
+  return { score: 0, maxMarks: q.marks || 0, criteria: [] };
+}
+
+function checkTableCell(cell, studentVal) {
+  if (studentVal == null || studentVal === "") return false;
+  if (cell.options) return String(studentVal).toLowerCase() === String(cell.expected).toLowerCase();
+  const num = parseFloat(studentVal);
+  if (isNaN(num)) return false;
+  return Math.abs(num - cell.expected) <= (cell.tolerance || 0);
+}
+
+// ============ TEXT MATCHING ============
+const STOP_MATCH = new Set(["the","a","an","is","are","was","were","of","to","in","on","for","and","or","it","this","that","be","by","as","at","if","so"]);
+const MATCH_SUFFIXES = [[/ies$/, "y"], [/sses$/, "ss"], [/ing$/, ""], [/ed$/, ""], [/ly$/, ""], [/s$/, ""]];
+
+function stemMatch(w) {
+  if (w.length < 4) return w;
+  for (const [re, rep] of MATCH_SUFFIXES) if (re.test(w)) return w.replace(re, rep);
+  return w;
+}
+
+function normalizeText(t) {
+  return String(t || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function textContainsConcept(text, concept) {
+  const normText = normalizeText(text);
+  const normConcept = normalizeText(concept);
+  if (!normConcept) return false;
+  if (normText.includes(normConcept)) return true;
+
+  const conceptWords = normConcept.split(" ").filter(w => w.length > 2);
+  if (!conceptWords.length) return normText.includes(normConcept);
+
+  const textWords = normText.split(" ");
+  const textStems = textWords.map(stemMatch);
+
+  return conceptWords.every(cw => {
+    const cs = stemMatch(cw);
+    return textStems.some(ts => ts === cs || ts.includes(cs) || cs.includes(ts));
   });
 }
 
-async function handleAsk(chapterScope, questionOverride) {
-  const input = $("#askInput");
-  const q = (questionOverride || input?.value || "").trim();
-  if (!q) return;
-  if (input) input.value = "";
-  chatHistory.push({ role: "user", text: q });
-  chatHistory.push({ role: "assistant", pending: true });
-  renderChatThread(chapterScope);
-  await new Promise(r => setTimeout(r, 300));
-  let result;
-  if (TUTOR_ENDPOINT) {
-    try { result = await remoteAnswer(q, chapterScope); }
-    catch { result = aiAnswer(q, chapterScope?.id); }
-  } else {
-    result = aiAnswer(q, chapterScope?.id);
-  }
-  chatHistory.pop();
-  chatHistory.push({
-    role: "assistant",
-    text: result.text,
-    suggestions: result.suggestions,
-    source: result.source
+// ============ RESULTS ============
+function renderExamResults(paperId) {
+  const paper = findExamPaper(paperId);
+  const state = getExamState(paperId);
+  if (!paper || !state || !state.graded) { location.hash = "#exams"; return; }
+
+  currentChapter = null;
+  $$(".nav-item").forEach(n => n.classList.remove("active"));
+  $('[data-nav="exams"]')?.classList.add("active");
+
+  const g = state.graded;
+  const pct = Math.round((g.total / 100) * 100);
+  const grade = gradeFromScore(g.total);
+  const sectionScores = {};
+  g.perQuestion.forEach(pq => {
+    const s = pq.question.section;
+    if (!sectionScores[s]) sectionScores[s] = { name: pq.question.sectionTitle, got: 0, max: 0 };
+    sectionScores[s].got += pq.result.score;
+    sectionScores[s].max += pq.question.marks;
   });
-  renderChatThread(chapterScope);
+
+  $("#main").innerHTML = `
+    <div class="exam-back"><a href="#exams">← Exam Centre</a></div>
+    <div class="results-hero">
+      <div class="results-title">${escapeHtml(paper.module)}</div>
+      <div class="results-subtitle">${escapeHtml(paper.name)}</div>
+      <div class="results-score">${g.total} <span class="results-score-max">/ 100</span></div>
+      <div class="results-percent">${pct}% · ${grade}</div>
+    </div>
+
+    <div class="section-breakdown">
+      <h3>Section breakdown</h3>
+      ${Object.entries(sectionScores).map(([s, data]) => {
+        const p = data.max ? Math.round((data.got / data.max) * 100) : 0;
+        return `<div class="section-bar-row">
+          <div class="sbr-label">Section ${s} · ${escapeHtml(data.name)}</div>
+          <div class="sbr-bar"><div class="sbr-fill" style="width:${p}%"></div></div>
+          <div class="sbr-value">${data.got.toFixed(1)} / ${data.max}</div>
+        </div>`;
+      }).join("")}
+    </div>
+
+    <div class="results-actions">
+      <button class="btn btn-primary" id="reviewExamBtn">Review answers</button>
+      <button class="btn" id="retakeBtn">Retake exam</button>
+      ${state.attempts > 1 ? `<div class="retake-note">This attempt #${state.attempts}. Model answers are hidden on retakes.</div>` : ""}
+    </div>
+    <div id="reviewPanel"></div>
+  `;
+
+  $("#reviewExamBtn").addEventListener("click", () => renderExamReview(paperId));
+  $("#retakeBtn").addEventListener("click", () => {
+    if (confirm("Retake this exam? Your best score is kept in the Tracker.")) {
+      const newState = { ...getExamState(paperId), status: "not_started", answers: {}, currentIndex: 0, timeLeft: null };
+      saveExamState(paperId, newState);
+      location.hash = `#exam-instructions/${paperId}`;
+    }
+  });
 }
 
-// ---------- MARK TRACKER ----------
-function getTrackerData() {
-  try { return JSON.parse(localStorage.getItem(TRACKER_KEY)) || []; }
-  catch { return []; }
+function gradeFromScore(score) {
+  if (score >= 75) return "Distinction";
+  if (score >= 70) return "Good pass";
+  if (score >= 60) return "Credit";
+  if (score >= 50) return "Pass";
+  return "Fail";
 }
-function saveTrackerData(data) { localStorage.setItem(TRACKER_KEY, JSON.stringify(data)); }
 
-window.deleteTrackerAssessment = function(modId, assId) {
-  if (!confirm("Delete this assessment?")) return;
-  const mod = trackerData.find(m => m.id === modId);
-  if (mod) {
-    mod.assessments = mod.assessments.filter(a => a.id !== assId);
-    saveTrackerData(trackerData);
-    renderTrackerModule(modId);
+function renderExamReview(paperId) {
+  const paper = findExamPaper(paperId);
+  const state = getExamState(paperId);
+  if (!paper || !state || !state.graded) return;
+  const showModel = state.showingModel;
+
+  const panel = $("#reviewPanel");
+  let html = `<h3 style="margin-top:40px">Question-by-question review</h3>`;
+
+  state.graded.perQuestion.forEach((pq, i) => {
+    const q = pq.question;
+    const r = pq.result;
+    const status = r.score >= r.maxMarks ? "ok" : r.score > 0 ? "partial" : "fail";
+    html += `<div class="review-q review-${status}">
+      <div class="review-q-head">
+        <span class="review-q-num">Q${i+1}</span>
+        <span class="review-q-section">${escapeHtml(q.sectionTitle)}</span>
+        <span class="review-q-marks">${r.score} / ${r.maxMarks}</span>
+      </div>
+      <div class="review-q-prompt">${escapeHtml(q.prompt).replace(/\n/g, '<br>')}</div>
+      ${q.type === "mcq" ? renderMcqReview(q, pq.answer) : ""}
+      ${q.type !== "mcq" && pq.answer && !isEmptyAnswer(pq.answer) ? `<details><summary>Your answer</summary><div class="review-your-answer">${escapeHtml(stringifyAnswer(pq.answer))}</div></details>` : ""}
+      ${showModel && q.modelAnswer ? `<details><summary>Model answer</summary><div class="review-model">${escapeHtml(q.modelAnswer)}</div></details>` : ""}
+      <div class="review-criteria">
+        ${r.criteria.map(c => `
+          <div class="criterion ${c.hit ? "hit" : "miss"}">
+            <span class="crit-mark">${c.awarded}/${c.marks}</span>
+            <span class="crit-label">${escapeHtml(c.label)}</span>
+          </div>
+        `).join("")}
+      </div>
+    </div>`;
+  });
+
+  panel.innerHTML = html;
+}
+
+function renderMcqReview(q, answer) {
+  const correct = answer === q.answer;
+  return `<div class="review-mcq ${correct ? "correct" : "wrong"}">
+    Your answer: ${answer != null ? String.fromCharCode(65 + answer) + ". " + escapeHtml(q.options[answer]) : "(not answered)"}
+    ${!correct ? `<br>Correct: ${String.fromCharCode(65 + q.answer)}. ${escapeHtml(q.options[q.answer])}<br><em>${escapeHtml(q.explanation || "")}</em>` : ""}
+  </div>`;
+}
+
+function stringifyAnswer(ans) {
+  if (typeof ans === "string") return ans;
+  if (typeof ans === "object") return Object.entries(ans).map(([k, v]) => `${k}: ${v}`).join("\n");
+  return String(ans);
+}
+
+// ============ TRACKER ============
+function syncExamToTracker(paperId, score) {
+  const paper = findExamPaper(paperId);
+  if (!paper) return;
+  const data = getTrackerData();
+  let mod = data.find(m => m.name === paper.module);
+  if (!mod) {
+    mod = { id: "mod_" + Date.now(), name: paper.module, code: CPUT_MODULES.find(c => c.name === paper.module)?.code || "", assessments: [] };
+    data.push(mod);
   }
-};
-
-window.deleteTrackerModule = function(modId) {
-  if (!confirm("Remove this module and all its marks from the tracker?")) return;
-  trackerData = trackerData.filter(m => m.id !== modId);
-  saveTrackerData(trackerData);
-  renderTrackerDashboard();
-};
+  // Find or create the assessment linked to this paper
+  let ass = mod.assessments.find(a => a.examRef === paperId);
+  if (!ass) {
+    ass = { id: "ass_" + paperId, type: paper.name, status: "released", mark: "", weight: 50, examRef: paperId };
+    mod.assessments.push(ass);
+  }
+  ass.mark = Math.round(score);
+  ass.status = "released";
+  saveTrackerData(data);
+  showToast(`Mark saved to Tracker: ${paper.module} · ${paper.name} = ${Math.round(score)}/100`);
+}
 
 function calculateModuleStats(mod) {
   let currentMark = 0, remainingWeight = 0, projectedMark = 0;
@@ -860,281 +939,413 @@ function calculateModuleStats(mod) {
   return { current: currentMark, remaining: remainingWeight, projected: currentMark + projectedMark };
 }
 
-function renderTracker() {
-  if (activeModuleId) renderTrackerModule(activeModuleId);
-  else renderTrackerDashboard();
-}
-
 function renderTrackerDashboard() {
   activeModuleId = null;
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
-  $('[data-nav="tracker"]').classList.add("active");
+  $('[data-nav="tracker"]')?.classList.add("active");
   trackerData = getTrackerData();
 
-  const availableToAdd = CPUT_MODULES.filter(cputMod => !trackerData.some(t => t.name === cputMod.name));
-  let availableHtml = availableToAdd.map(mod =>
-    `<button class="module-pill" onclick="window.addModuleFromList('${escapeHtml(mod.name)}', '${escapeHtml(mod.code)}')">
-      <span class="plus">+</span> ${escapeHtml(mod.name)}
-    </button>`
-  ).join("");
+  const availableToAdd = CPUT_MODULES.filter(c => !trackerData.some(t => t.name === c.name));
+  let availableHtml = availableToAdd.map(m => `<button class="module-pill" onclick="window.addModuleFromList('${escapeHtml(m.name)}', '${escapeHtml(m.code)}')"><span class="plus">+</span> ${escapeHtml(m.name)}</button>`).join("");
 
   let cardsHtml = trackerData.map(mod => {
     const stats = calculateModuleStats(mod);
     return `<div class="module-card">
-      <div>
-        <h3>${escapeHtml(mod.name)}</h3>
-        <div class="code">${escapeHtml(mod.code)}</div>
-      </div>
-      ${examSummaryHtml(mod)}
+      <div><h3>${escapeHtml(mod.name)}</h3><div class="code">${escapeHtml(mod.code)}</div></div>
       <div class="module-card-stats">
-        <div><span>Current Mark:</span> <strong>${stats.current.toFixed(2)}%</strong></div>
-        <div><span>Projected:</span> <strong>${stats.projected.toFixed(2)}%</strong></div>
-        <div><span>Remaining Weight:</span> <strong>${stats.remaining.toFixed(2)}%</strong></div>
+        <div><span>Current:</span><strong>${stats.current.toFixed(2)}%</strong></div>
+        <div><span>Projected:</span><strong>${stats.projected.toFixed(2)}%</strong></div>
+        <div><span>Remaining:</span><strong>${stats.remaining.toFixed(2)}%</strong></div>
       </div>
       <div class="module-card-actions">
-        <button class="btn btn-primary" onclick="window.openModule('${mod.id}')" style="flex:1;">View Marks</button>
+        <button class="btn btn-primary" onclick="window.openModule('${mod.id}')" style="flex:1;">View marks</button>
         <button class="btn btn-text" onclick="window.deleteTrackerModule('${mod.id}')">Remove</button>
       </div>
     </div>`;
   }).join("");
 
   $("#main").innerHTML = `
-    <div class="tracker-header">
-      <div class="dashboard-header" style="margin:0;">
-        <h1>Mark Tracker</h1>
-        <p>Each module has <strong>two 100-mark exam papers</strong>. Click a module to track marks.</p>
-      </div>
-    </div>
-    ${availableHtml ? `<div class="available-modules">${availableHtml}</div>` : ''}
-    <div class="tracker-grid">
-      ${cardsHtml || `<div class="empty" style="grid-column: 1/-1;"><h2>No modules tracked yet</h2><p>Click one of the modules above to begin.</p></div>`}
-    </div>
+    <div class="dashboard-header"><h1>Mark Tracker</h1><p>Exam scores sync automatically. Add other assessments as you go.</p></div>
+    ${availableHtml ? `<div class="available-modules">${availableHtml}</div>` : ""}
+    <div class="tracker-grid">${cardsHtml || `<div class="empty" style="grid-column:1/-1"><h2>No modules tracked yet</h2><p>Add a module above or sit an exam — it links automatically.</p></div>`}</div>
   `;
 }
 
-function examSummaryHtml(mod) {
-  const exams = (mod.assessments || []).filter(a => (a.type || "").startsWith("Exam"));
-  if (!exams.length) return "";
-  return `<div class="module-card-exams">
-    ${exams.map(a => {
-      const hasMark = a.mark !== "" && a.mark !== null && !isNaN(parseFloat(a.mark));
-      const m = hasMark ? parseFloat(a.mark).toFixed(0) : "—";
-      return `<div class="module-card-exam">
-        <span>${escapeHtml(a.type)}</span>
-        <strong>${m}${hasMark ? "/100" : ""}</strong>
-      </div>`;
-    }).join("")}
-  </div>`;
-}
-
 window.addModuleFromList = function(name, code) {
-  const now = Date.now();
-  trackerData.push({
-    id: "mod_" + now,
-    name, code,
-    assessments: [
-      { id: "ass_" + now + "_1", type: "Exam Paper 1", status: "pending", mark: "", weight: 50 },
-      { id: "ass_" + now + "_2", type: "Exam Paper 2", status: "pending", mark: "", weight: 50 }
-    ]
-  });
+  trackerData.push({ id: "mod_" + Date.now(), name, code, assessments: [] });
   saveTrackerData(trackerData);
   renderTrackerDashboard();
-  showToast(`${name} added — two 100-mark exam papers are ready to track.`);
+  showToast(`${name} added.`);
 };
 
-window.openModule = function(id) { activeModuleId = id; renderTracker(); };
+window.openModule = function(id) { activeModuleId = id; renderTrackerModule(id); };
 
-window.addNewAssessment = function(modId) {
+window.deleteTrackerModule = function(id) {
+  if (!confirm("Remove this module?")) return;
+  trackerData = trackerData.filter(m => m.id !== id);
+  saveTrackerData(trackerData);
+  renderTrackerDashboard();
+};
+
+window.deleteTrackerAssessment = function(modId, assId) {
+  if (!confirm("Delete this assessment?")) return;
+  const mod = trackerData.find(m => m.id === modId);
+  if (mod) { mod.assessments = mod.assessments.filter(a => a.id !== assId); saveTrackerData(trackerData); renderTrackerModule(modId); }
+};
+
+window.backToTracker = function() { activeModuleId = null; renderTrackerDashboard(); };
+
+window.updateAss = function(el) {
+  const modId = el.dataset.mod, assId = el.dataset.ass, field = el.dataset.field, val = el.value;
   const mod = trackerData.find(m => m.id === modId);
   if (!mod) return;
-  mod.assessments.push({
-    id: "ass_" + Date.now(),
-    type: "Test", status: "pending", mark: "", weight: ""
-  });
+  const ass = mod.assessments.find(a => a.id === assId);
+  if (!ass) return;
+  ass[field] = val;
   saveTrackerData(trackerData);
-  renderTrackerModule(modId);
+  const summaryBox = $(".tracker-summary-box");
+  if (summaryBox) summaryBox.innerHTML = summaryHtml(calculateModuleStats(mod));
 };
+
+function summaryHtml(stats) {
+  return `<h4>Module summary</h4>
+    <div class="tracker-summary-row"><span>Current Mark (Released)</span><strong>${stats.current.toFixed(2)}%</strong></div>
+    <div class="tracker-summary-row"><span>Remaining Weight (Pending)</span><strong>${stats.remaining.toFixed(2)}%</strong></div>
+    <div class="tracker-summary-row total"><span>Projected Final Mark</span><strong>${stats.projected.toFixed(2)}%</strong></div>`;
+}
 
 function renderTrackerModule(modId) {
   const mod = trackerData.find(m => m.id === modId);
   if (!mod) { activeModuleId = null; renderTrackerDashboard(); return; }
   currentChapter = null;
   $$(".nav-item").forEach(n => n.classList.remove("active"));
-  $('[data-nav="tracker"]').classList.add("active");
+  $('[data-nav="tracker"]')?.classList.add("active");
   const stats = calculateModuleStats(mod);
 
-  let rowsHtml = (mod.assessments || []).map(a => `
+  const rowsHtml = (mod.assessments || []).map(a => `
     <tr>
-      <td>
-        <select data-mod="${modId}" data-ass="${a.id}" data-field="type" onchange="window.updateAss(this)">
-          <option value="Exam Paper 1" ${a.type === 'Exam Paper 1' ? 'selected' : ''}>Exam Paper 1</option>
-          <option value="Exam Paper 2" ${a.type === 'Exam Paper 2' ? 'selected' : ''}>Exam Paper 2</option>
-          <option value="Test" ${a.type === 'Test' ? 'selected' : ''}>Test</option>
-          <option value="TUT" ${a.type === 'TUT' ? 'selected' : ''}>TUT</option>
-          <option value="Assignment" ${a.type === 'Assignment' ? 'selected' : ''}>Assignment</option>
-          <option value="Class Task" ${a.type === 'Class Task' ? 'selected' : ''}>Class Task</option>
-          <option value="Project" ${a.type === 'Project' ? 'selected' : ''}>Project</option>
-          <option value="Other" ${a.type === 'Other' ? 'selected' : ''}>Other</option>
-        </select>
-      </td>
-      <td>
-        <select data-mod="${modId}" data-ass="${a.id}" data-field="status" onchange="window.updateAss(this)">
-          <option value="released" ${a.status === 'released' ? 'selected' : ''}>Released</option>
-          <option value="pending" ${a.status === 'pending' ? 'selected' : ''}>Pending</option>
-          <option value="suppressed" ${a.status === 'suppressed' ? 'selected' : ''}>Suppressed</option>
-        </select>
-      </td>
-      <td><input type="number" value="${a.mark}" placeholder="0–100" data-mod="${modId}" data-ass="${a.id}" data-field="mark" onchange="window.updateAss(this)" step="0.1" min="0" max="100"></td>
-      <td><input type="number" value="${a.weight}" placeholder="0" data-mod="${modId}" data-ass="${a.id}" data-field="weight" onchange="window.updateAss(this)" step="0.1" min="0" max="100"></td>
-      <td><button class="btn-text" onclick="window.deleteTrackerAssessment('${modId}', '${a.id}')" style="color:var(--danger); font-size:18px;">✕</button></td>
+      <td><select data-mod="${modId}" data-ass="${a.id}" data-field="type" onchange="window.updateAss(this)">
+        <option value="Test" ${a.type === 'Test' ? 'selected' : ''}>Test</option>
+        <option value="TUT" ${a.type === 'TUT' ? 'selected' : ''}>TUT</option>
+        <option value="Assignment" ${a.type === 'Assignment' ? 'selected' : ''}>Assignment</option>
+        <option value="Class Task" ${a.type === 'Class Task' ? 'selected' : ''}>Class Task</option>
+        <option value="Project" ${a.type === 'Project' ? 'selected' : ''}>Project</option>
+        <option value="Other" ${a.type === 'Other' ? 'selected' : ''}>Other</option>
+        ${a.examRef ? `<option value="${escapeHtml(a.type)}" selected>${escapeHtml(a.type)} (exam)</option>` : ""}
+      </select></td>
+      <td><select data-mod="${modId}" data-ass="${a.id}" data-field="status" onchange="window.updateAss(this)">
+        <option value="released" ${a.status === 'released' ? 'selected' : ''}>Released</option>
+        <option value="pending" ${a.status === 'pending' ? 'selected' : ''}>Pending</option>
+        <option value="suppressed" ${a.status === 'suppressed' ? 'selected' : ''}>Suppressed</option>
+      </select></td>
+      <td><input type="number" value="${a.mark}" placeholder="0–100" data-mod="${modId}" data-ass="${a.id}" data-field="mark" onchange="window.updateAss(this)" min="0" max="100" ${a.examRef ? "readonly" : ""}></td>
+      <td><input type="number" value="${a.weight}" placeholder="0" data-mod="${modId}" data-ass="${a.id}" data-field="weight" onchange="window.updateAss(this)" min="0" max="100"></td>
+      <td>${a.examRef ? `<a href="#exam/${a.examRef}" class="btn-text">View</a>` : `<button class="btn-text" onclick="window.deleteTrackerAssessment('${modId}','${a.id}')" style="color:var(--danger)">✕</button>`}</td>
     </tr>
   `).join("");
 
   $("#main").innerHTML = `
-    <div style="margin-bottom: 24px;">
-      <button class="btn" onclick="window.backToTracker()" style="margin-bottom: 16px;">← Back to Modules</button>
-      <div class="dashboard-header" style="margin:0;">
-        <h1>${escapeHtml(mod.name)} <span style="font-size: 18px; color: var(--text-muted); font-weight: 500;">(${escapeHtml(mod.code)})</span></h1>
-        <p>Each exam paper is worth <strong>100 marks</strong>. Enter the mark (0–100) and its weight.</p>
-      </div>
+    <div style="margin-bottom:24px">
+      <button class="btn" onclick="window.backToTracker()" style="margin-bottom:16px">← Back to Modules</button>
+      <div class="dashboard-header" style="margin:0"><h1>${escapeHtml(mod.name)} <span style="font-size:18px;color:var(--text-muted)">(${escapeHtml(mod.code)})</span></h1></div>
     </div>
-    <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
-      <strong>Released</strong> = actual mark received. <strong>Pending</strong> = exam not yet written or mark not yet received (enter an estimate to include it in the projection).
-    </p>
     <div class="tracker-table-wrap">
       <table class="tracker-table">
-        <thead>
-          <tr>
-            <th style="width: 40%;">Type</th>
-            <th style="width: 20%;">Status</th>
-            <th style="width: 15%;">Mark (/100)</th>
-            <th style="width: 15%;">Weight (%)</th>
-            <th style="width: 10%;"></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rowsHtml || `<tr><td colspan="5" style="text-align:center; padding: 32px; color: var(--text-muted);">No assessments added yet. Click the button below.</td></tr>`}
-        </tbody>
+        <thead><tr><th style="width:38%">Type</th><th style="width:20%">Status</th><th style="width:16%">Mark (/100)</th><th style="width:16%">Weight (%)</th><th></th></tr></thead>
+        <tbody>${rowsHtml || `<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-muted)">No assessments yet.</td></tr>`}</tbody>
       </table>
     </div>
-    <div style="display: flex; gap: 16px; margin-bottom: 32px;">
-      <button class="btn btn-primary" onclick="window.addNewAssessment('${modId}')" style="flex: 1;">+ Add Assessment</button>
+    <div style="display:flex;gap:16px;margin-bottom:32px">
+      <button class="btn btn-primary" onclick="window.addNewAssessment('${modId}')" style="flex:1">+ Add assessment</button>
     </div>
     <div class="tracker-summary-box">${summaryHtml(stats)}</div>
   `;
 }
 
-function summaryHtml(stats) {
-  return `
-    <h4>Module Summary</h4>
-    <div class="tracker-summary-row">
-      <span>Current Mark (Released)</span>
-      <strong>${stats.current.toFixed(2)}%</strong>
-    </div>
-    <div class="tracker-summary-row">
-      <span>Remaining Weight (Pending)</span>
-      <strong>${stats.remaining.toFixed(2)}%</strong>
-    </div>
-    <div class="tracker-summary-row total">
-      <span>Projected Final Mark</span>
-      <strong>${stats.projected.toFixed(2)}%</strong>
-    </div>
-    <p style="font-size: 13px; color: var(--text-muted); margin: 16px 0 0 0; text-align: center;">
-      * Projected mark uses your estimated marks entered in Pending rows.
-    </p>
-  `;
-}
-
-window.backToTracker = function() { activeModuleId = null; renderTrackerDashboard(); };
-
-window.updateAss = function(el) {
-  const modId = el.dataset.mod;
-  const assId = el.dataset.ass;
-  const field = el.dataset.field;
-  const val = el.value;
+window.addNewAssessment = function(modId) {
   const mod = trackerData.find(m => m.id === modId);
-  if (mod) {
-    const ass = mod.assessments.find(a => a.id === assId);
-    if (ass) {
-      ass[field] = val;
-      saveTrackerData(trackerData);
-      const stats = calculateModuleStats(mod);
-      const summaryBox = $(".tracker-summary-box");
-      if (summaryBox) summaryBox.innerHTML = summaryHtml(stats);
-    }
-  }
+  if (!mod) return;
+  mod.assessments.push({ id: "ass_" + Date.now(), type: "Test", status: "pending", mark: "", weight: "" });
+  saveTrackerData(trackerData);
+  renderTrackerModule(modId);
 };
 
-// ---------- SEARCH ----------
-$("#searchInput").addEventListener("input", (e) => {
-  const q = e.target.value.trim().toLowerCase();
-  if (!q) { renderHome(); return; }
-  const results = CHAPTERS.filter(ch =>
-    ch.title.toLowerCase().includes(q) ||
-    ch.summary.toLowerCase().includes(q) ||
-    ch.notes.toLowerCase().includes(q)
-  );
-  $("#main").innerHTML = `
-    <div class="dashboard-header"><h1>Search results</h1><p>${results.length} topic(s) match "${escapeHtml(q)}"</p></div>
-    <div class="card-grid">
-      ${results.map(ch => `<div class="card" data-chapter="${ch.id}">
-        <div class="card-top"><span class="chapter-num">${escapeHtml(ch.number)}</span></div>
-        <h3>${escapeHtml(ch.title)}</h3>
-        <p>${escapeHtml(ch.summary)}</p>
-      </div>`).join("") || `<div class="empty"><h2>No matches</h2><p>Try a different keyword.</p></div>`}
-    </div>
-  `;
-  $$(".card").forEach(c => c.addEventListener("click", () => {
-    location.hash = `#chapter/${c.dataset.chapter}`;
-  }));
-});
+// ============ AI DRAWER ============
+function openChatDrawer() {
+  const drawer = $("#chatDrawer");
+  const overlay = $("#chatOverlay");
+  drawer.classList.add("open");
+  overlay.hidden = false;
+  const scope = currentChapter;
+  renderChatIntoDrawer(scope);
+}
+function closeChatDrawer() {
+  $("#chatDrawer").classList.remove("open");
+  $("#chatOverlay").hidden = true;
+}
 
-// ---------- ROUTER ----------
-function renderTimetable() {
-  currentChapter = null;
-  activeModuleId = null;
-  $$(".nav-item").forEach(n => n.classList.remove("active"));
-  $('[data-nav="timetable"]').classList.add("active");
-  $("#main").innerHTML = `
-    <div class="dashboard-header">
-      <h1>Exam Timetable</h1>
-      <p>Every module has <strong>two 100-mark exam papers</strong>. Keep track of both dates.</p>
-    </div>
-    <div class="timetable-widget">
-      <div class="timetable-groups">
-        ${renderTimetableGroupsHtml()}
+function renderChatIntoDrawer(chapterScope) {
+  chatHistory = [];
+  const placeholder = chapterScope ? `Ask about ${chapterScope.title}…` : "Ask anything about your course…";
+  $("#chatDrawerBody").innerHTML = `
+    <div class="chat-container chat-drawer-container">
+      <div class="chat-thread" id="chatThread"></div>
+      <div class="chat-input-wrap">
+        <textarea id="askInput" placeholder="${escapeHtml(placeholder)}"></textarea>
+        <button class="btn btn-primary" id="askBtn">Ask</button>
       </div>
     </div>
   `;
+  $("#askBtn").addEventListener("click", () => handleAsk(chapterScope));
+  $("#askInput").addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAsk(chapterScope); }
+  });
+  renderChatThread(chapterScope);
 }
 
+// ============ AI ENGINE ============
+const STOPWORDS = new Set(["the","a","an","is","are","was","were","of","to","in","on","for","and","or","what","how","why","when","which","who","does","do","can","i","my","with","that","this","it","be","by","from","as","at","if","so","am","me","we","us","our","you","your","they","them","their","he","she","his","her","its","but","not","no","nor","than","then","too","very","just","only","also","such","some","any","all","each","every","both","few","more","most","other","into","over","under","about","after","before","between","during","through","up","down","out","off","again","further","once","here","there","where","will","would","should","could","may","might","must","shall","have","has","had","being","been","get","got","make","made"]);
+
+const SYNONYMS = {
+  calculate:["compute","formula","calculation","work","derive","find","equation","math"],
+  formula:["calculate","equation","calculation","compute"],
+  difference:["compare","versus","vs","distinguish","contrast","differ"],
+  compare:["difference","versus","vs","contrast"],
+  define:["definition","meaning","explain","describe"],
+  definition:["define","meaning","explain"],
+  explain:["define","describe","meaning"],
+  exam:["test","assessment","paper"],
+  test:["exam","assessment","paper"],
+  profit:["margin","earnings","income","gain"],
+  cost:["expense","expenditure","price"],
+  price:["cost","pricing"],
+  revenue:["sales","income","turnover"],
+  sales:["revenue","turnover"],
+  vat:["tax","taxation"],
+  tax:["vat","taxation"],
+  inventory:["stock","goods"],
+  stock:["inventory","goods"],
+  employee:["worker","staff","personnel","labour"],
+  worker:["employee","staff"],
+  manager:["management","supervisor","leader"],
+  management:["manager","supervising"],
+  leader:["leadership","manager"],
+  leadership:["leader","managing"],
+  motivation:["motivate","incentive","drive"],
+  communication:["communicate","message"],
+  conflict:["dispute","disagreement","clash"],
+  team:["group","teamwork"],
+  group:["team","teamwork"],
+  customer:["client","consumer","buyer"],
+  consumer:["customer","client","buyer"],
+  promotion:["advertising","marketing"],
+  marketing:["market","promotion"],
+  segmentation:["segment","target"],
+  target:["targeting","targets"],
+  breakeven:["break-even","bep"],
+  "break-even":["breakeven","bep"]
+};
+const AI_SUFFIXES = [[/ies$/,"y"],[/ing$/,""],[/ed$/,""],[/ly$/,""],[/s$/,""]];
+function stemAI(w) { if (w.length < 4) return w; for (const [re, rep] of AI_SUFFIXES) if (re.test(w)) return w.replace(re, rep); return w; }
+function tokenizeAI(t) { return String(t||"").toLowerCase().replace(/[^a-z0-9\s&'-]/g," ").split(/\s+/).filter(w => w.length > 1 && !STOPWORDS.has(w)); }
+function expandAI(terms) {
+  const out = new Set();
+  for (const t of terms) {
+    out.add(t); out.add(stemAI(t));
+    const syn = SYNONYMS[t] || SYNONYMS[stemAI(t)];
+    if (syn) for (const s of syn) { out.add(s); for (const w of tokenizeAI(s)) { out.add(w); out.add(stemAI(w)); } }
+  }
+  return out;
+}
+
+let TUTOR_INDEX = null;
+function buildIndex() {
+  if (TUTOR_INDEX) return TUTOR_INDEX;
+  const sections = [], docFreq = {};
+  for (const ch of CHAPTERS) {
+    const parts = ch.notes.split(/^##\s+/m);
+    parts.forEach((part, i) => {
+      if (!part.trim()) return;
+      const lines = part.split("\n");
+      const heading = (i === 0 ? "Overview" : lines[0]).trim();
+      const body = (i === 0 ? part : lines.slice(1).join("\n")).trim();
+      const text = heading + "\n" + body;
+      const tokens = tokenizeAI(text);
+      const stems = new Set(tokens.map(stemAI));
+      for (const s of stems) docFreq[s] = (docFreq[s] || 0) + 1;
+      sections.push({ chapterId: ch.id, chapterNumber: ch.number, chapterTitle: ch.title, module: ch.module, heading, body, text, tokens, stems, lower: text.toLowerCase(), isFaq: false });
+    });
+    (ch.faq || []).forEach(f => {
+      const text = f.q + " " + f.a;
+      const tokens = tokenizeAI(text);
+      const stems = new Set(tokens.map(stemAI));
+      for (const s of stems) docFreq[s] = (docFreq[s] || 0) + 1;
+      sections.push({ chapterId: ch.id, chapterNumber: ch.number, chapterTitle: ch.title, module: ch.module, heading: "Q: " + f.q, body: f.a, text, tokens, stems, lower: text.toLowerCase(), isFaq: true });
+    });
+  }
+  TUTOR_INDEX = { sections, docFreq, N: sections.length };
+  return TUTOR_INDEX;
+}
+
+function scoreSection(sec, queryStems, queryTerms, preferredId) {
+  let score = 0;
+  for (const qs of queryStems) {
+    if (sec.stems.has(qs)) {
+      const df = TUTOR_INDEX.docFreq[qs] || 1;
+      score += Math.log(1 + TUTOR_INDEX.N / df);
+    }
+  }
+  for (const qt of queryTerms) if (sec.lower.includes(qt)) score += 0.3;
+  const hL = sec.heading.toLowerCase(), cL = sec.chapterTitle.toLowerCase();
+  for (const qt of queryTerms) {
+    if (hL.includes(qt)) score += 1.0;
+    if (cL.includes(qt)) score += 0.5;
+  }
+  if (sec.isFaq) score *= 1.3;
+  if (preferredId && sec.chapterId === preferredId) score *= 1.4;
+  return score;
+}
+
+function aiAnswer(question, preferredId) {
+  const rawTokens = tokenizeAI(question);
+  if (!rawTokens.length) return { text: "Please type a question about the course — for example, *\"How do I calculate break-even?\"*", suggestions: defaultSuggestions(preferredId) };
+  buildIndex();
+  const queryTerms = rawTokens;
+  const queryStems = expandAI(rawTokens);
+  const scored = TUTOR_INDEX.sections.map(s => ({ s, score: scoreSection(s, queryStems, queryTerms, preferredId) })).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+  if (!scored.length || scored[0].score < 0.8) {
+    return { text: "I couldn't find a strong match in the course notes. Try rephrasing, or pick a suggestion below.", suggestions: defaultSuggestions(preferredId) };
+  }
+  const top = scored.slice(0, 3);
+  const best = top[0].s;
+  const bestChapter = CHAPTERS.find(c => c.id === best.chapterId);
+  let answerBody = best.isFaq ? best.body : extractRelevantSentences(best.body, queryTerms, 4);
+  const heading = best.isFaq ? best.heading.replace(/^Q:\s*/, "") : best.heading;
+  const text = `**${heading}**\n\n${answerBody}`;
+  const related = top.slice(1).map(x => x.s).filter(s => s.heading !== best.heading);
+  const suggestions = [];
+  related.forEach(s => { if (s.isFaq) suggestions.push(s.heading.replace(/^Q:\s*/, "")); else suggestions.push(`${s.chapterTitle}: ${s.heading}`); });
+  if (!suggestions.length) (bestChapter.faq || []).slice(0, 3).forEach(f => suggestions.push(f.q));
+  return { text, suggestions: [...new Set(suggestions)].slice(0, 4), source: `${best.chapterNumber}. ${best.chapterTitle} · ${best.module}` };
+}
+
+function extractRelevantSentences(body, queryTerms, maxS = 4) {
+  const lines = body.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const scored = lines.map((line, i) => {
+    const lower = line.toLowerCase();
+    let hits = 0;
+    for (const t of queryTerms) if (lower.includes(t)) hits++;
+    return { line: line.length > 400 ? line.slice(0, 400) + "…" : line, hits, index: i };
+  });
+  const top = scored.filter(s => s.hits > 0).sort((a, b) => b.hits - a.hits).slice(0, maxS);
+  top.sort((a, b) => a.index - b.index);
+  if (!top.length) return body.slice(0, 600);
+  return top.map(s => s.line).join("\n\n");
+}
+
+function defaultSuggestions(preferredId) {
+  if (preferredId) {
+    const ch = CHAPTERS.find(c => c.id === preferredId);
+    if (ch && ch.faq && ch.faq.length) return ch.faq.slice(0, 4).map(f => f.q);
+  }
+  return QUICK_START_QUESTIONS.slice(0, 4);
+}
+
+function emptyChatHtml(scope) {
+  const suggestions = scope ? (scope.faq || []).slice(0, 4).map(f => f.q) : QUICK_START_QUESTIONS;
+  const scopeText = scope ? `about <strong>${escapeHtml(scope.title)}</strong>` : `about your course`;
+  return `<div class="chat-empty">
+    <div class="chat-empty-icon">✨</div>
+    <h3>Hi, I'm Stack AI</h3>
+    <p>Grounded in your course notes. Ask me anything ${scopeText}.</p>
+    <div class="chat-suggestions">${suggestions.map(s => `<button class="chat-chip" data-q="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join("")}</div>
+  </div>`;
+}
+
+function renderChatMessage(m) {
+  if (m.role === "user") return `<div class="chat-msg user"><div class="chat-bubble">${escapeHtml(m.text)}</div></div>`;
+  if (m.pending) return `<div class="chat-msg assistant"><div class="chat-bubble chat-typing"><span></span><span></span><span></span></div></div>`;
+  return `<div class="chat-msg assistant"><div class="chat-bubble">${mdToHtml(m.text)}${m.source ? `<div class="chat-source">Source: ${escapeHtml(m.source)}</div>` : ""}${m.suggestions && m.suggestions.length ? `<div class="chat-suggestions chat-suggestions-inline">${m.suggestions.map(s => `<button class="chat-chip" data-q="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join("")}</div>` : ""}</div></div>`;
+}
+
+function renderChatThread(scope) {
+  const thread = $("#chatThread");
+  if (!thread) return;
+  thread.innerHTML = chatHistory.length ? chatHistory.map(renderChatMessage).join("") : emptyChatHtml(scope);
+  if (chatHistory.length) thread.scrollTop = thread.scrollHeight;
+  $$(".chat-chip").forEach(btn => btn.addEventListener("click", () => { const q = btn.dataset.q; const inp = $("#askInput"); if (inp) inp.value = q; handleAsk(scope); }));
+}
+
+async function handleAsk(scope, override) {
+  const input = $("#askInput");
+  const q = (override || input?.value || "").trim();
+  if (!q) return;
+  if (input) input.value = "";
+  chatHistory.push({ role: "user", text: q });
+  chatHistory.push({ role: "assistant", pending: true });
+  renderChatThread(scope);
+  await new Promise(r => setTimeout(r, 250));
+  const result = aiAnswer(q, scope?.id);
+  chatHistory.pop();
+  chatHistory.push({ role: "assistant", text: result.text, suggestions: result.suggestions, source: result.source });
+  renderChatThread(scope);
+}
+
+// ============ ROUTER ============
 function route() {
+  pauseExamTimer();
   const hash = location.hash || "#home";
-  if (hash.startsWith("#chapter/")) { activeModuleId = null; renderChapter(hash.replace("#chapter/", "")); }
-  else if (hash === "#ask") { activeModuleId = null; renderAskGlobal(); }
-  else if (hash === "#timetable") { activeModuleId = null; renderTimetable(); }
-  else if (hash === "#tracker") renderTracker();
-  else { activeModuleId = null; renderHome(); }
+
+  if (hash.startsWith("#chapter/")) {
+    renderChapter(hash.replace("#chapter/", ""));
+  } else if (hash === "#exams") {
+    renderExamCentre();
+  } else if (hash.startsWith("#exam-instructions/")) {
+    renderExamInstructions(hash.replace("#exam-instructions/", ""));
+  } else if (hash.startsWith("#exam/")) {
+    renderExam(hash.replace("#exam/", ""));
+  } else if (hash === "#tracker") {
+    renderTrackerDashboard();
+  } else {
+    renderHome();
+  }
+
   if (window.innerWidth <= 800) $("#sidebar").classList.remove("open");
 }
 
+// ============ SEARCH ============
+$("#searchInput").addEventListener("input", e => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!q) { renderHome(); return; }
+  const results = CHAPTERS.filter(ch => ch.title.toLowerCase().includes(q) || ch.summary.toLowerCase().includes(q) || ch.notes.toLowerCase().includes(q));
+  $("#main").innerHTML = `<div class="dashboard-header"><h1>Search results</h1><p>${results.length} topic(s) match "${escapeHtml(q)}"</p></div>
+    <div class="card-grid">${results.map(ch => `<div class="card" data-chapter="${ch.id}"><div class="card-top"><span class="chapter-num">${escapeHtml(ch.number)}</span></div><h3>${escapeHtml(ch.title)}</h3><p>${escapeHtml(ch.summary)}</p></div>`).join("") || `<div class="empty"><h2>No matches</h2><p>Try a different keyword.</p></div>`}</div>`;
+  $$(".card").forEach(c => c.addEventListener("click", () => { location.hash = `#chapter/${c.dataset.chapter}`; }));
+});
+
+// ============ BOOT ============
 window.addEventListener("hashchange", route);
 $("#menuBtn").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
-$("#resetBtn").addEventListener("click", resetProgress);
+$("#resetBtn").addEventListener("click", () => {
+  if (!confirm("Reset all progress, exams and tracker data? Cannot be undone.")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(TRACKER_KEY);
+  localStorage.removeItem(EXAMS_KEY);
+  renderSidebar();
+  location.hash = "#home";
+  route();
+  showToast("Progress reset");
+});
 
-$$('[data-nav="home"]').forEach(el => el.addEventListener("click", (e) => {
-  if (el.tagName === "A") { e.preventDefault(); location.hash = "#home"; }
-}));
-$$('[data-nav="timetable"]').forEach(el => el.addEventListener("click", (e) => {
-  if (el.tagName === "A") { e.preventDefault(); location.hash = "#timetable"; }
-}));
-$$('[data-nav="tracker"]').forEach(el => el.addEventListener("click", (e) => {
-  if (el.tagName === "A") { e.preventDefault(); location.hash = "#tracker"; }
-}));
-$$('[data-nav="ask"]').forEach(el => el.addEventListener("click", (e) => {
-  if (el.tagName === "A") { e.preventDefault(); location.hash = "#ask"; }
-}));
+$$('[data-nav="home"]').forEach(el => el.addEventListener("click", e => { if (el.tagName === "A") { e.preventDefault(); location.hash = "#home"; } }));
+$$('[data-nav="exams"]').forEach(el => el.addEventListener("click", e => { if (el.tagName === "A") { e.preventDefault(); location.hash = "#exams"; } }));
+$$('[data-nav="tracker"]').forEach(el => el.addEventListener("click", e => { if (el.tagName === "A") { e.preventDefault(); location.hash = "#tracker"; } }));
+
+// FAB & drawer
+$("#aiFab").addEventListener("click", openChatDrawer);
+$("#closeDrawer").addEventListener("click", closeChatDrawer);
+$("#chatOverlay").addEventListener("click", closeChatDrawer);
 
 function updateOffline() { $("#offlinePill").hidden = navigator.onLine; }
 window.addEventListener("online", updateOffline);
@@ -1143,20 +1354,16 @@ window.addEventListener("offline", updateOffline);
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").then(reg => {
-      console.log("Service Worker registered. Scope:", reg.scope);
       reg.onupdatefound = () => {
-        const installingWorker = reg.installing;
-        installingWorker.onstatechange = () => {
-          if (installingWorker.state === 'installed') {
-            if (navigator.serviceWorker.controller) showToast("New update available! Refresh to apply.");
-            else showToast("App ready for offline use!");
+        const w = reg.installing;
+        w.onstatechange = () => {
+          if (w.state === 'installed') {
+            if (navigator.serviceWorker.controller) showToast("Update available — refresh to apply.");
+            else showToast("Ready for offline use.");
           }
         };
       };
-    }).catch((err) => {
-      console.error("Service Worker registration failed:", err);
-      showToast("Offline mode failed to start.");
-    });
+    }).catch(() => showToast("Offline mode failed to start."));
   });
 }
 
