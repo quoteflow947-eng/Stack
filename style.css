@@ -125,13 +125,13 @@ button { font: inherit; cursor: pointer; }
 /* ---------- LAYOUT ---------- */
 .layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 300px 1fr;
   min-height: calc(100vh - 65px);
 }
 .sidebar {
   border-right: 1px solid var(--border);
   background: var(--bg-elev);
-  padding: 24px 16px;
+  padding: 20px 14px;
   overflow-y: auto;
   height: calc(100vh - 65px);
   position: sticky; top: 65px;
@@ -152,16 +152,103 @@ button { font: inherit; cursor: pointer; }
   letter-spacing: 0.08em; color: var(--text-subtle);
   padding: 22px 14px 8px; font-weight: 700;
 }
-.chapter-link { justify-content: space-between; }
-.chapter-link > span:first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chapter-badge {
-  font-size: 11px; padding: 2px 8px; border-radius: 99px;
-  background: var(--bg-soft); color: var(--text-muted);
-  font-weight: 600; flex-shrink: 0;
-}
-.chapter-badge.done { background: var(--success-soft); color: var(--success); }
 .reset-btn { color: var(--text-muted); font-size: 13px; }
 .reset-btn:hover { color: var(--danger); }
+
+/* ---------- COLLAPSIBLE MODULE GROUPS ---------- */
+#chapterList {
+  margin-top: 20px;
+}
+.module-group {
+  margin-bottom: 2px;
+  border-radius: var(--radius-sm);
+}
+.module-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; width: 100%;
+  background: none; border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text); font-weight: 600;
+  font-size: 13.5px; text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+.module-header:hover {
+  background: var(--bg-soft);
+}
+.module-group.active > .module-header {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.module-chevron {
+  display: inline-block;
+  width: 12px; font-size: 9px;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  text-align: center;
+}
+.module-group.expanded > .module-header > .module-chevron {
+  transform: rotate(90deg);
+}
+.module-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+.module-progress {
+  font-size: 10px; font-weight: 700;
+  padding: 2px 7px; border-radius: 99px;
+  background: var(--bg-soft); color: var(--text-muted);
+  flex-shrink: 0;
+}
+.module-group.active > .module-header > .module-progress {
+  background: rgba(37, 99, 235, 0.15);
+  color: var(--primary);
+}
+.module-chapters {
+  display: none;
+  margin-left: 18px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  margin-top: 2px;
+  margin-bottom: 6px;
+}
+.module-group.expanded > .module-chapters {
+  display: block;
+  animation: slideDown 0.18s ease;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.module-chapters .nav-item {
+  font-size: 12.5px;
+  padding: 8px 10px;
+  line-height: 1.4;
+}
+.module-chapters .nav-item > span:first-child {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.35;
+}
+.chapter-link { justify-content: space-between; align-items: center; gap: 8px; }
+.chapter-badge {
+  font-size: 10px; padding: 2px 7px; border-radius: 99px;
+  background: var(--bg-soft); color: var(--text-muted);
+  font-weight: 700; flex-shrink: 0;
+}
+.chapter-badge.done { background: var(--success-soft); color: var(--success); }
+.module-chapters .nav-item.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
 
 .main {
   padding: 40px 48px;
@@ -806,16 +893,6 @@ button { font: inherit; cursor: pointer; }
   background: rgba(255,255,255,0.25); padding: 1px 4px;
   border-radius: 4px; backdrop-filter: blur(4px);
 }
-.ai-fab::after {
-  content: ""; position: absolute; inset: -4px;
-  border-radius: 50%; border: 2px solid var(--primary);
-  opacity: 0; animation: fabPulse 2.5s infinite;
-  pointer-events: none;
-}
-@keyframes fabPulse {
-  0% { opacity: 0.5; transform: scale(1); }
-  100% { opacity: 0; transform: scale(1.4); }
-}
 
 /* ---------- CHAT DRAWER ---------- */
 .chat-overlay {
@@ -948,7 +1025,7 @@ button { font: inherit; cursor: pointer; }
   .layout { grid-template-columns: 1fr; }
   .sidebar {
     position: fixed; top: 65px; left: 0; bottom: 0;
-    width: 280px; z-index: 40;
+    width: 290px; z-index: 40;
     transform: translateX(-100%);
     transition: transform 0.2s;
     box-shadow: var(--shadow-lg);
